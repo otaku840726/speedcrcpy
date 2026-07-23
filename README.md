@@ -60,12 +60,15 @@ node packages/server/dist/index.js
 
 ```bash
 docker run -d --name speedcrcpy \
+  --restart unless-stopped \
   -p 8000:8000 \
   -e SPEEDCRCPY_PASSWORD=改成你的密碼 \
   -v speedcrcpy-data:/data \
   -v speedcrcpy-adb:/root/.android \
   ghcr.io/otaku840726/speedcrcpy:latest
 ```
+
+`--restart unless-stopped` 讓容器在主機重開或極端情況下自動恢復。
 
 或本機自行建置:
 
