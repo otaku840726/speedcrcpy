@@ -52,6 +52,32 @@ node packages/server/dist/index.js
 
 首次啟動會自動產生登入密碼並寫入 `data/config.json`(log 也會印出)。
 
+## Docker
+
+映像已內建 `adb`(Google platform-tools),不需主機另裝。無線 adb 走 outbound 連線,預設 bridge 網路即可連到區網手機。
+
+從 GitHub Container Registry 拉取(main 分支每次 push 自動發佈):
+
+```bash
+docker run -d --name speedcrcpy \
+  -p 8000:8000 \
+  -e SPEEDCRCPY_PASSWORD=改成你的密碼 \
+  -v speedcrcpy-data:/data \
+  -v speedcrcpy-adb:/root/.android \
+  ghcr.io/otaku840726/speedcrcpy:latest
+```
+
+或本機自行建置:
+
+```bash
+docker build -t speedcrcpy .
+docker run -d --name speedcrcpy -p 8000:8000 -v speedcrcpy-data:/data ghcr.io/otaku840726/speedcrcpy:latest
+```
+
+- `/data` volume 保存密碼、HMAC 金鑰、已知裝置清單
+- `/root/.android` volume 保存 adb 金鑰(裝置授權跨重啟保留)
+- 若手機需要回連容器(極少數 Android <9 無線情境),改用 `--network host`
+
 ### 設定
 
 環境變數(或 `data/config.json`):

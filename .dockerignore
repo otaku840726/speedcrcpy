@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+data
+packages/server/data
+.git
+.github
+.claude
+*.log
+*.h264
+**/*.tsbuildinfo
+.DS_Store
+Dockerfile
+.dockerignore
+README.md
