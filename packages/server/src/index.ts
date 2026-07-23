@@ -6,6 +6,19 @@ import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 
+// Safety net: the app runs many concurrent adb/scrcpy streams. A single
+// device dropping (EPIPE on a closed adb socket, a scrcpy stream ending
+// mid-read) throws asynchronously; without this, Node turns it into a fatal
+// crash that kills EVERY device session and viewer. Log and stay up — errors
+// are isolated per session and the affected session tears itself down.
+process.on("unhandledRejection", (reason) => {
+  const err = reason as { code?: string; message?: string };
+  console.warn(`[process] unhandled rejection (${err?.code ?? "?"}): ${err?.message ?? String(reason)}`);
+});
+process.on("uncaughtException", (error) => {
+  console.warn(`[process] uncaught exception (${(error as { code?: string }).code ?? "?"}): ${error.message}`);
+});
+
 const config = loadConfig();
 const auth = new Auth(config.dataDir, config.password);
 

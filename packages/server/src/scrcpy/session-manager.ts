@@ -145,23 +145,26 @@ export class ManagedSession {
     if (this.switching || preset.id === this.presetId) return false;
     this.switching = true;
 
+    // Buffer everything the new encoder emits until we're ready to swap, so
+    // the first keyframe is never lost.
+    const buffered: ScrcpyMediaStreamPacket[] = [];
+    let sawKeyframe = false;
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => (resolveReady = resolve));
+    const initialListener = (packet: ScrcpyMediaStreamPacket) => {
+      buffered.push(packet);
+      if (packet.type === "data" && packet.keyframe) {
+        sawKeyframe = true;
+        resolveReady();
+      }
+    };
+
+    let next: VideoPipeline | undefined;
     try {
-      // Buffer everything the new encoder emits until we're ready to swap, so
-      // the first keyframe is never lost.
-      const buffered: ScrcpyMediaStreamPacket[] = [];
-      let sawKeyframe = false;
-      let resolveReady!: () => void;
-      const ready = new Promise<void>((resolve) => (resolveReady = resolve));
-
-      const initialListener = (packet: ScrcpyMediaStreamPacket) => {
-        buffered.push(packet);
-        if (packet.type === "data" && packet.keyframe) {
-          sawKeyframe = true;
-          resolveReady();
-        }
-      };
-
-      const next = await VideoPipeline.start(
+      // The new scrcpy instance can die on startup (device busy, second
+      // encoder rejected, stream ends before metadata) — that must NOT crash
+      // the process or disturb the still-running current pipeline.
+      next = await VideoPipeline.start(
         this.adb,
         { preset, codec: this.video.config.codec, intraRefresh: this.video.config.intraRefresh },
         initialListener,
@@ -171,7 +174,7 @@ export class ManagedSession {
       await Promise.race([ready, timeout]);
 
       if (!sawKeyframe) {
-        await next.close();
+        await next.close().catch(() => {});
         return false;
       }
 
@@ -189,8 +192,13 @@ export class ManagedSession {
       next.removePacketListener(initialListener);
       this.wireVideo(next);
 
-      void old.close();
+      void old.close().catch(() => {});
       return true;
+    } catch (error) {
+      // Keep the current pipeline running at the current preset.
+      console.warn(`[session] quality switch to ${preset.id} failed for ${this.serial}: ${(error as Error).message}`);
+      if (next) await next.close().catch(() => {});
+      return false;
     } finally {
       this.switching = false;
     }
