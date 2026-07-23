@@ -77,6 +77,7 @@ docker run -d --name speedcrcpy -p 8000:8000 -v speedcrcpy-data:/data ghcr.io/ot
 - `/data` volume 保存密碼、HMAC 金鑰、已知裝置清單
 - `/root/.android` volume 保存 adb 金鑰(裝置授權跨重啟保留)
 - 若手機需要回連容器(極少數 Android <9 無線情境),改用 `--network host`
+- **容器預設關閉被控端實體螢幕**(專用被控裝置降溫);要保持螢幕亮著加 `-e SPEEDCRCPY_SCREEN_OFF=false`
 
 ### 設定
 
@@ -89,7 +90,7 @@ docker run -d --name speedcrcpy -p 8000:8000 -v speedcrcpy-data:/data ghcr.io/ot
 | `SPEEDCRCPY_PASSWORD` | 自動產生 | 登入密碼 |
 | `SPEEDCRCPY_DATA_DIR` | `./data` | 資料目錄(密碼、裝置清單、金鑰) |
 | `SPEEDCRCPY_ADB_HOST` / `SPEEDCRCPY_ADB_PORT` | `127.0.0.1:5037` | adb server 位置 |
-| `SPEEDCRCPY_SCREEN_OFF` | `false` | 每次鏡像預設關閉被控端實體螢幕 |
+| `SPEEDCRCPY_SCREEN_OFF` | `false`(Docker 映像預設 `true`) | 每次鏡像預設關閉被控端實體螢幕 |
 
 ## HTTPS(遠端訪問必須)
 

@@ -38,7 +38,11 @@ RUN apt-get update \
 ENV NODE_ENV=production \
     SPEEDCRCPY_DATA_DIR=/data \
     SPEEDCRCPY_HOST=0.0.0.0 \
-    SPEEDCRCPY_PORT=8000
+    SPEEDCRCPY_PORT=8000 \
+    # Containers usually drive dedicated, unattended devices — keep their
+    # physical screens off by default (lower heat/battery). Override with
+    # `-e SPEEDCRCPY_SCREEN_OFF=false`.
+    SPEEDCRCPY_SCREEN_OFF=true
 
 WORKDIR /app
 COPY --from=builder /app ./

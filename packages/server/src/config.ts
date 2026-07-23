@@ -10,8 +10,16 @@ const ConfigSchema = z.object({
   dataDir: z.string().default("data"),
   adbHost: z.string().default("127.0.0.1"),
   adbPort: z.coerce.number().int().default(5037),
-  /** Start every mirror session with the device's physical screen off. */
-  screenOffDefault: z.coerce.boolean().default(false),
+  /**
+   * Start every mirror session with the device's physical screen off.
+   * Accepts a JSON boolean or an env string — note z.coerce.boolean() would
+   * treat the string "false" as true (any non-empty string is truthy), so
+   * parse the truthy tokens explicitly.
+   */
+  screenOffDefault: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === "true" || v === "1" || v === "yes"),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
