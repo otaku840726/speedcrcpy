@@ -43,7 +43,11 @@ ENV NODE_ENV=production \
     # Containers usually drive dedicated, unattended devices — keep their
     # physical screens off by default (lower heat/battery). Override with
     # `-e SPEEDCRCPY_SCREEN_OFF=false`.
-    SPEEDCRCPY_SCREEN_OFF=true
+    SPEEDCRCPY_SCREEN_OFF=true \
+    # Dedicated devices: keep mirror sessions warm for the whole connection so
+    # reopening is always instant (no ~2 s cold start). The device encodes
+    # continuously; set a positive seconds value to expire idle sessions.
+    SPEEDCRCPY_SESSION_LINGER=0
 
 WORKDIR /app
 COPY --from=builder /app ./

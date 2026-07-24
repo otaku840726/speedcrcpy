@@ -27,6 +27,14 @@ const ConfigSchema = z.object({
    * the background loop (thumbnails are then captured on request only).
    */
   thumbnailInterval: z.coerce.number().min(0).default(10),
+  /**
+   * How long (seconds) to keep a mirror session warm after the last viewer
+   * leaves. Reattaching to a warm session is instant; a cold start takes ~2 s
+   * and resets the (restored) quality. 0 keeps the session warm for as long as
+   * the device stays connected — instant loads always, at the cost of the
+   * device encoding video continuously even when nobody is watching.
+   */
+  sessionLinger: z.coerce.number().min(0).default(60),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -56,6 +64,9 @@ export function loadConfig(): Config {
     ...(process.env.SPEEDCRCPY_SCREEN_OFF ? { screenOffDefault: process.env.SPEEDCRCPY_SCREEN_OFF } : {}),
     ...(process.env.SPEEDCRCPY_THUMBNAIL_INTERVAL
       ? { thumbnailInterval: process.env.SPEEDCRCPY_THUMBNAIL_INTERVAL }
+      : {}),
+    ...(process.env.SPEEDCRCPY_SESSION_LINGER
+      ? { sessionLinger: process.env.SPEEDCRCPY_SESSION_LINGER }
       : {}),
   };
 

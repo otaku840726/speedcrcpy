@@ -27,8 +27,11 @@ const auth = new Auth(config.dataDir, config.password);
 const adbManager = new AdbManager(config);
 const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
 const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterval * 1000);
-const sessionManager = new SessionManager(adbManager, config.screenOffDefault, (serial, active) =>
-  screenManager.setSessionActive(serial, active),
+const sessionManager = new SessionManager(
+  adbManager,
+  config.screenOffDefault,
+  config.sessionLinger * 1000,
+  (serial, active) => screenManager.setSessionActive(serial, active),
 );
 const app = await buildApp(config, auth, adbManager, thumbnailManager);
 

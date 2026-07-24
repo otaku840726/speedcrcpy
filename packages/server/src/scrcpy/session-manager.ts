@@ -12,10 +12,6 @@ import { SessionCongestion } from "../transport/congestion.js";
 import { DeviceSession } from "./device-session.js";
 import { VideoPipeline } from "./video-pipeline.js";
 
-// Keep the device session warm after the last viewer drops — mobile browsers
-// kill background-tab sockets within seconds, and reattaching to a live
-// session is instant while a cold start takes ~2 s.
-const LINGER_MS = 60_000;
 const RESET_VIDEO_DEBOUNCE_MS = 1_000;
 const SWITCH_TIMEOUT_MS = 8_000;
 
@@ -58,6 +54,13 @@ export class ManagedSession {
     public video: VideoPipeline,
     private readonly onEmptyClose: () => void,
     private readonly onVideoExit: () => void,
+    /**
+     * Grace period (ms) to keep the session warm after the last viewer leaves.
+     * <= 0 keeps it warm indefinitely (torn down only when the device drops).
+     */
+    private readonly lingerMs: number,
+    /** Persist the user's quality choice so it survives a session teardown. */
+    private readonly onQualityPersist: (auto: boolean, quality: QualitySettings) => void,
   ) {
     this.quality = video.config.quality;
     this.autoLadderIdx = nearestLadderIndex(video.config.quality);
@@ -107,8 +110,10 @@ export class ManagedSession {
       this.controllingViewer = this.viewers.values().next().value;
       this.controllingViewer?.notifyControlChanged(true);
     }
-    if (this.viewers.size === 0 && !this.lingerTimer) {
-      this.lingerTimer = setTimeout(() => this.onEmptyClose(), LINGER_MS);
+    // lingerMs <= 0: keep the session warm indefinitely (instant reattach, at
+    // the cost of the device encoding continuously with no viewer).
+    if (this.viewers.size === 0 && !this.lingerTimer && this.lingerMs > 0) {
+      this.lingerTimer = setTimeout(() => this.onEmptyClose(), this.lingerMs);
     }
   }
 
@@ -154,15 +159,10 @@ export class ManagedSession {
   }
 
   /**
-   * Make-before-break quality switch: start a second scrcpy video instance
-   * (new scid), wait for its config + first keyframe, atomically swap the
-   * fan-out source, then kill the old instance. Input, audio and clipboard
-   * live in the persistent DeviceSession and are never touched.
-   */
-  /**
    * Apply a user quality choice. `auto` true resumes ladder adaptation
    * (starting from the rung nearest `quality`, clamped to the viewer ceiling);
-   * false pins `quality` exactly and silences the congestion controller.
+   * false pins `quality` exactly and silences the congestion controller. The
+   * choice is persisted so a later session for this device restores it.
    */
   async setQualityMode(auto: boolean, quality: QualitySettings): Promise<void> {
     const modeFlipped = this.autoAdapt !== auto;
@@ -176,6 +176,7 @@ export class ManagedSession {
     } else {
       target = quality;
     }
+    this.onQualityPersist(auto, target);
 
     if (sameQuality(target, this.quality)) {
       // Encoder unchanged — just broadcast the flipped mode so viewers' toggles
@@ -192,6 +193,12 @@ export class ManagedSession {
     await this.switchQuality(QUALITY_LADDER[idx]!, true);
   }
 
+  /**
+   * Make-before-break quality switch: start a second scrcpy video instance
+   * (new scid), wait for its config + first keyframe, atomically swap the
+   * fan-out source, then kill the old instance. Input, audio and clipboard
+   * live in the persistent DeviceSession and are never touched.
+   */
   async switchQuality(quality: QualitySettings, byAuto: boolean): Promise<boolean> {
     if (this.switching || sameQuality(quality, this.quality)) return false;
     this.switching = true;
@@ -281,10 +288,14 @@ export class ManagedSession {
 
 export class SessionManager {
   private readonly sessions = new Map<string, Promise<ManagedSession>>();
+  /** Last quality choice per device, so a new session restores it. */
+  private readonly deviceQuality = new Map<string, { auto: boolean; quality: QualitySettings }>();
 
   constructor(
     private readonly adbManager: AdbManager,
     private readonly screenOffDefault = false,
+    /** Warm-linger after the last viewer leaves (ms); <= 0 = keep warm forever. */
+    private readonly sessionLingerMs = 60_000,
     /** Notified when a device is taken by / released from a viewer session. */
     private readonly onSessionActive?: (serial: string, active: boolean) => void,
   ) {}
@@ -319,7 +330,16 @@ export class SessionManager {
     // When screen-off is the standing policy, keep it off after the session
     // ends / the server dies too (scrcpy powers off on close).
     const device = await DeviceSession.start(adb, { powerOffOnClose: this.screenOffDefault });
-    const quality = QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
+
+    // Restore the device's last quality choice; auto mode starts from the rung
+    // nearest the stored settings (it re-adapts anyway), manual pins it exactly.
+    const stored = this.deviceQuality.get(serial);
+    const startAuto = stored?.auto ?? true;
+    const quality = stored
+      ? stored.auto
+        ? QUALITY_LADDER[nearestLadderIndex(stored.quality)]!
+        : stored.quality
+      : QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
     const video = await VideoPipeline.start(adb, { quality, codec: "h264", intraRefresh: true }, serial);
 
     const onGone = () => void this.teardown(serial, "exited");
@@ -331,7 +351,10 @@ export class SessionManager {
       video,
       () => void this.teardown(serial, "idle"),
       onGone,
+      this.sessionLingerMs,
+      (auto, q) => this.deviceQuality.set(serial, { auto, quality: q }),
     );
+    session.autoAdapt = startAuto;
     device.onExit(onGone);
 
     if (this.screenOffDefault) device.setScreenOff(true);
