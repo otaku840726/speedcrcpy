@@ -1,9 +1,13 @@
 import { QUALITY_LADDER, type ClientMessage, type ServerMessage, type VideoMeta } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioPipeline, type AudioState } from "../core/audio-pipeline";
+import { useDeviceList } from "../core/events-socket";
 import { attachInput } from "../core/input";
 import { SessionClient } from "../core/session-client";
 import { VideoPipeline } from "../core/video-pipeline";
+import { DeviceRail } from "./DeviceRail";
+
+const isWideScreen = () => (typeof window !== "undefined" ? window.innerWidth >= 700 : true);
 
 interface SessionState {
   status: "connecting" | "streaming" | "reconnecting" | "gone" | "error";
@@ -29,7 +33,15 @@ function copyTextFallback(text: string): void {
   textarea.remove();
 }
 
-export function Session({ serial, onBack }: { serial: string; onBack: () => void }) {
+export function Session({
+  serial,
+  onBack,
+  onSwitch,
+}: {
+  serial: string;
+  onBack: () => void;
+  onSwitch: (serial: string) => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
   const imeRef = useRef<HTMLInputElement>(null);
   const clientRef = useRef<SessionClient | undefined>(undefined);
@@ -38,6 +50,12 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
   const [videoSize, setVideoSize] = useState<{ width: number; height: number } | undefined>();
   const [audioState, setAudioState] = useState<AudioState | undefined>();
   const [clipboardToast, setClipboardToast] = useState<string | undefined>();
+  const [wide, setWide] = useState(isWideScreen);
+  const [railOpen, setRailOpen] = useState(false);
+
+  const allDevices = useDeviceList();
+  const connected = (allDevices ?? []).filter((d) => d.state === "device");
+  const multiDevice = connected.length > 1;
   const [pasteOpen, setPasteOpen] = useState(false);
   const pasteOpenRef = useRef(false);
   const pasteInputRef = useRef<HTMLTextAreaElement>(null);
@@ -50,6 +68,55 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
   }, []);
+
+  // Switch to the device `step` positions away (wraps around).
+  const switchBy = useCallback(
+    (step: number) => {
+      if (connected.length < 2) return;
+      const idx = connected.findIndex((d) => d.serial === serial);
+      const from = idx < 0 ? 0 : idx;
+      const next = connected[(from + step + connected.length) % connected.length];
+      if (next && next.serial !== serial) onSwitch(next.serial);
+    },
+    [connected, serial, onSwitch],
+  );
+
+  // Track wide vs narrow layout via window resize (matchMedia change events
+  // don't fire reliably on programmatic resize), and close the mobile rail
+  // when crossing the breakpoint.
+  useEffect(() => {
+    const onResize = () => {
+      const isWide = window.innerWidth >= 700;
+      setWide(isWide);
+      if (isWide) setRailOpen(false);
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Alt+digit jumps to the Nth device; Alt+←/→ cycles. Alt keeps these clear
+  // of the physical-keyboard text that gets injected into the device.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey) return;
+      if (e.key >= "1" && e.key <= "9") {
+        const target = connected[Number(e.key) - 1];
+        if (target && target.serial !== serial) {
+          onSwitch(target.serial);
+          e.preventDefault();
+        }
+      } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+        switchBy(1);
+        e.preventDefault();
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+        switchBy(-1);
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [connected, serial, onSwitch, switchBy]);
 
   const openPasteDialog = useCallback(() => {
     pasteOpenRef.current = true;
@@ -264,12 +331,27 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
 
   return (
     <div className="session-page">
-      <div className="session-topbar">
-        <button onClick={onBack}>← 返回</button>
-        <span style={{ fontWeight: 600 }}>{state.deviceName}</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
-        </span>
+      <div className="session-body">
+        {wide && multiDevice && (
+          <DeviceRail devices={connected} currentSerial={serial} onSwitch={onSwitch} mode="persistent" />
+        )}
+        <div className="session-main">
+          <div className="session-topbar">
+            <button onClick={onBack}>← 返回</button>
+            {multiDevice && (
+              <button className="topbar-arrow" title="上一台 (Alt+←)" onClick={() => switchBy(-1)}>
+                ‹
+              </button>
+            )}
+            <span style={{ fontWeight: 600 }}>{state.deviceName}</span>
+            {multiDevice && (
+              <button className="topbar-arrow" title="下一台 (Alt+→)" onClick={() => switchBy(1)}>
+                ›
+              </button>
+            )}
+            <span className="muted" style={{ fontSize: 12 }}>
+              {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
+            </span>
         <select
           value={presetId ?? ""}
           onChange={(e) => send({ type: "setQuality", presetId: e.target.value })}
@@ -310,6 +392,19 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
         {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
       </div>
       <div ref={containerRef} className="session-stage">
+        {!wide && multiDevice && (
+          <div className="rail-handle" title="切換裝置" onClick={() => setRailOpen(true)} />
+        )}
+        {!wide && (
+          <DeviceRail
+            devices={connected}
+            currentSerial={serial}
+            onSwitch={onSwitch}
+            mode="overlay"
+            open={railOpen}
+            onClose={() => setRailOpen(false)}
+          />
+        )}
         {showStats && stats && (
           <div className="stats-overlay">
             <div>檔位 {stats.presetId} · 模式 {stats.mode === "through" ? "穿透" : "閘控"} · {stats.congestion}</div>
@@ -356,8 +451,10 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
           </div>
         )}
       </div>
-      <ImeInput inputRef={imeRef} send={send} />
-      <NavBar send={send} onShowKeyboard={() => imeRef.current?.focus()} onPaste={pasteToDevice} />
+          <ImeInput inputRef={imeRef} send={send} />
+          <NavBar send={send} onShowKeyboard={() => imeRef.current?.focus()} onPaste={pasteToDevice} />
+        </div>
+      </div>
     </div>
   );
 }

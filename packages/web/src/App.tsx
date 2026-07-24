@@ -19,7 +19,9 @@ export function App() {
   if (authState === "checking") return null;
   if (authState === "unauthenticated") return <Login onSuccess={() => setAuthState("authenticated")} />;
   if (sessionSerial !== undefined) {
-    return <Session serial={sessionSerial} onBack={() => setSessionSerial(undefined)} />;
+    return (
+      <Session serial={sessionSerial} onBack={() => setSessionSerial(undefined)} onSwitch={setSessionSerial} />
+    );
   }
   return <DeviceList onOpenSession={setSessionSerial} />;
 }
