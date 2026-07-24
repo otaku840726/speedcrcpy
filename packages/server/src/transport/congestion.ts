@@ -1,4 +1,4 @@
-import { presetIndex, QUALITY_LADDER } from "@speedcrcpy/shared";
+import { QUALITY_LADDER } from "@speedcrcpy/shared";
 import type { ManagedSession } from "../scrcpy/session-manager.js";
 import type { SendQueue } from "./send-queue.js";
 
@@ -231,10 +231,11 @@ export class SessionCongestion {
 
   private tick(): void {
     if (this.viewers.size === 0) return;
+    // Manual mode pins the encoder; the ladder controller stays out of the way.
+    if (!this.session.autoAdapt) return;
     const now = Date.now();
-    const currentIdx = presetIndex(this.session.presetId);
-    if (currentIdx < 0) return;
-    const preset = QUALITY_LADDER[currentIdx]!;
+    const currentIdx = this.session.autoLadderIdx;
+    const rung = QUALITY_LADDER[currentIdx]!;
 
     let worstTriggers = 0;
     let allHealthy = true;
@@ -246,7 +247,7 @@ export class SessionCongestion {
       // with CBR + a static screen the encoder sends a fraction of the nominal
       // bitrate, so comparing send rate against the preset without a backlog
       // check is trivially true and slides the ladder to the bottom.
-      if (viewer.isBacklogged && viewer.currentSendBitrate < preset.videoBitRate * THROUGHPUT_LOW_RATIO) {
+      if (viewer.isBacklogged && viewer.currentSendBitrate < rung.videoBitRate * THROUGHPUT_LOW_RATIO) {
         backloggedAndSlow = true;
       }
     }
@@ -268,12 +269,12 @@ export class SessionCongestion {
     if (stepDown && currentIdx < QUALITY_LADDER.length - 1 && now - this.lastStepAt > 5_000) {
       this.lastStepAt = now;
       this.lowThroughputSince = undefined;
-      void this.session.switchQuality(QUALITY_LADDER[currentIdx + 1]!, true);
+      void this.session.autoStepTo(currentIdx + 1);
       return;
     }
 
-    // Step up only toward the effective ceiling: the user's manual pin and
-    // every viewer's advertised capability (software decoders cap themselves).
+    // Step up only toward the effective ceiling: every viewer's advertised
+    // capability (software decoders cap themselves at a lower rung).
     const ceilingIdx = this.session.effectiveCeilingIdx();
     if (
       allHealthy &&
@@ -282,7 +283,7 @@ export class SessionCongestion {
       now - this.lastStepAt > STEP_UP_HEALTHY_MS
     ) {
       this.lastStepAt = now;
-      void this.session.switchQuality(QUALITY_LADDER[currentIdx - 1]!, true);
+      void this.session.autoStepTo(currentIdx - 1);
     }
   }
 }

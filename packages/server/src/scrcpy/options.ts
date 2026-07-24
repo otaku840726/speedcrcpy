@@ -1,4 +1,4 @@
-import type { QualityPreset } from "@speedcrcpy/shared";
+import type { QualitySettings } from "@speedcrcpy/shared";
 import { AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import { ScrcpyInstanceId } from "@yume-chan/scrcpy";
 import { SCRCPY_SERVER_VERSION } from "./server-binary.js";
@@ -33,7 +33,7 @@ function videoCodecOptions(maxFps: number, intraRefresh: boolean, forceBaseline:
 }
 
 export interface VideoSessionConfig {
-  preset: QualityPreset;
+  quality: QualitySettings;
   codec: "h264" | "h265";
   intraRefresh: boolean;
 }
@@ -45,11 +45,11 @@ export function makeVideoOptions(config: VideoSessionConfig, forceBaseline: bool
       video: true,
       audio: false,
       control: true,
-      maxSize: config.preset.maxSize,
-      videoBitRate: config.preset.videoBitRate,
-      maxFps: config.preset.maxFps,
+      maxSize: config.quality.maxSize,
+      videoBitRate: config.quality.videoBitRate,
+      maxFps: config.quality.maxFps,
       videoCodec: config.codec,
-      videoCodecOptions: videoCodecOptions(config.preset.maxFps, config.intraRefresh, forceBaseline),
+      videoCodecOptions: videoCodecOptions(config.quality.maxFps, config.intraRefresh, forceBaseline),
       clipboardAutosync: false,
     },
     { version: SCRCPY_SERVER_VERSION },

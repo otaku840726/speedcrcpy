@@ -1,4 +1,10 @@
-import { DEFAULT_PRESET_ID, presetById, presetIndex, QUALITY_LADDER, type QualityPreset } from "@speedcrcpy/shared";
+import {
+  DEFAULT_LADDER_INDEX,
+  nearestLadderIndex,
+  QUALITY_LADDER,
+  sameQuality,
+  type QualitySettings,
+} from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import type { AdbManager } from "../adb/adb-manager.js";
@@ -15,8 +21,13 @@ const SWITCH_TIMEOUT_MS = 8_000;
 
 export interface SessionViewer {
   notifyDeviceGone(): void;
-  /** Video stream restarted (quality switch): resend META/config, flush queue. */
-  notifyVideoRestarted(auto: boolean): void;
+  /**
+   * Video stream restarted (quality switch): resend META/config, flush queue.
+   * `byAuto` marks a change the congestion controller made on its own.
+   */
+  notifyVideoRestarted(byAuto: boolean): void;
+  /** Auto/manual mode (or pinned quality) changed without restarting the stream. */
+  notifyQualityMode(): void;
   notifyControlChanged(controlling: boolean): void;
   notifyScreenOffChanged(off: boolean): void;
 }
@@ -24,9 +35,12 @@ export interface SessionViewer {
 /** A running per-device pair of scrcpy instances plus attached viewers. */
 export class ManagedSession {
   readonly viewers = new Set<SessionViewer>();
-  presetId: string;
-  /** Set when the user picked a preset manually — auto-adaptation won't step up past it. */
-  manualPresetId: string | undefined;
+  /** When true the congestion controller drives quality along the ladder. */
+  autoAdapt = true;
+  /** Encoder settings the video pipeline is currently running at. */
+  quality: QualitySettings;
+  /** Auto mode's current ladder rung (ignored while autoAdapt is false). */
+  autoLadderIdx: number;
   readonly congestion: SessionCongestion;
 
   private readonly packetListeners = new Set<(packet: ScrcpyMediaStreamPacket) => void>();
@@ -45,29 +59,33 @@ export class ManagedSession {
     private readonly onEmptyClose: () => void,
     private readonly onVideoExit: () => void,
   ) {
-    this.presetId = video.config.preset.id;
+    this.quality = video.config.quality;
+    this.autoLadderIdx = nearestLadderIndex(video.config.quality);
     this.wireVideo(video);
     this.congestion = new SessionCongestion(this);
   }
 
   private controllingViewer: SessionViewer | undefined;
-  /** Per-viewer quality ceiling (ladder index), e.g. software decoders. */
+  /** Per-viewer auto-mode ladder ceiling (highest index they can decode). */
   private readonly viewerCaps = new Map<SessionViewer, number>();
 
-  /** Highest ladder index (= lowest quality) among pin and viewer caps. */
+  /** Highest ladder index (= lowest quality) any viewer cap forces. */
   effectiveCeilingIdx(): number {
-    let idx = this.manualPresetId ? presetIndex(this.manualPresetId) : 0;
+    let idx = 0;
     for (const cap of this.viewerCaps.values()) idx = Math.max(idx, cap);
     return idx;
   }
 
-  /** Worst-viewer-wins: a capped viewer immediately lowers a higher stream. */
-  setViewerCap(viewer: SessionViewer, presetId: string): void {
-    const capIdx = presetIndex(presetId);
-    if (capIdx < 0) return;
-    this.viewerCaps.set(viewer, capIdx);
-    if (presetIndex(this.presetId) < capIdx) {
-      void this.switchQuality(QUALITY_LADDER[capIdx]!, true);
+  /**
+   * Worst-viewer-wins: a capped viewer (e.g. a software decoder) immediately
+   * lowers a higher auto stream. Only enforced in auto mode — a manual pin is
+   * the user's explicit choice.
+   */
+  setViewerCap(viewer: SessionViewer, maxLadderIndex: number): void {
+    if (maxLadderIndex < 0 || maxLadderIndex >= QUALITY_LADDER.length) return;
+    this.viewerCaps.set(viewer, maxLadderIndex);
+    if (this.autoAdapt && this.autoLadderIdx < maxLadderIndex) {
+      void this.autoStepTo(maxLadderIndex);
     }
   }
 
@@ -141,8 +159,41 @@ export class ManagedSession {
    * fan-out source, then kill the old instance. Input, audio and clipboard
    * live in the persistent DeviceSession and are never touched.
    */
-  async switchQuality(preset: QualityPreset, auto: boolean): Promise<boolean> {
-    if (this.switching || preset.id === this.presetId) return false;
+  /**
+   * Apply a user quality choice. `auto` true resumes ladder adaptation
+   * (starting from the rung nearest `quality`, clamped to the viewer ceiling);
+   * false pins `quality` exactly and silences the congestion controller.
+   */
+  async setQualityMode(auto: boolean, quality: QualitySettings): Promise<void> {
+    const modeFlipped = this.autoAdapt !== auto;
+    this.autoAdapt = auto;
+
+    let target: QualitySettings;
+    if (auto) {
+      const idx = Math.max(nearestLadderIndex(quality), this.effectiveCeilingIdx());
+      this.autoLadderIdx = idx;
+      target = QUALITY_LADDER[idx]!;
+    } else {
+      target = quality;
+    }
+
+    if (sameQuality(target, this.quality)) {
+      // Encoder unchanged — just broadcast the flipped mode so viewers' toggles
+      // stay in sync (no stream restart / video blip).
+      if (modeFlipped) for (const viewer of this.viewers) viewer.notifyQualityMode();
+      return;
+    }
+    await this.switchQuality(target, false);
+  }
+
+  /** Step auto mode to a ladder rung (congestion controller / viewer cap). */
+  async autoStepTo(idx: number): Promise<void> {
+    this.autoLadderIdx = idx;
+    await this.switchQuality(QUALITY_LADDER[idx]!, true);
+  }
+
+  async switchQuality(quality: QualitySettings, byAuto: boolean): Promise<boolean> {
+    if (this.switching || sameQuality(quality, this.quality)) return false;
     this.switching = true;
 
     // Buffer everything the new encoder emits until we're ready to swap, so
@@ -166,7 +217,7 @@ export class ManagedSession {
       // the process or disturb the still-running current pipeline.
       next = await VideoPipeline.start(
         this.adb,
-        { preset, codec: this.video.config.codec, intraRefresh: this.video.config.intraRefresh },
+        { quality, codec: this.video.config.codec, intraRefresh: this.video.config.intraRefresh },
         this.serial,
         initialListener,
       );
@@ -181,12 +232,12 @@ export class ManagedSession {
 
       const old = this.video;
       this.video = next;
-      this.presetId = preset.id;
+      this.quality = quality;
 
       // Swap: stop forwarding the old stream, tell viewers to restart their
       // decoders, replay the buffered config+keyframe, then go live.
       for (const unsub of this.videoUnsubs) unsub();
-      for (const viewer of this.viewers) viewer.notifyVideoRestarted(auto);
+      for (const viewer of this.viewers) viewer.notifyVideoRestarted(byAuto);
       for (const packet of buffered) {
         for (const listener of this.packetListeners) listener(packet);
       }
@@ -197,7 +248,9 @@ export class ManagedSession {
       return true;
     } catch (error) {
       // Keep the current pipeline running at the current preset.
-      console.warn(`[session] quality switch to ${preset.id} failed for ${this.serial}: ${(error as Error).message}`);
+      console.warn(
+        `[session] quality switch to ${quality.maxSize}px/${quality.videoBitRate} failed for ${this.serial}: ${(error as Error).message}`,
+      );
       if (next) await next.close().catch(() => {});
       return false;
     } finally {
@@ -266,8 +319,8 @@ export class SessionManager {
     // When screen-off is the standing policy, keep it off after the session
     // ends / the server dies too (scrcpy powers off on close).
     const device = await DeviceSession.start(adb, { powerOffOnClose: this.screenOffDefault });
-    const preset: QualityPreset = presetById(DEFAULT_PRESET_ID)!;
-    const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true }, serial);
+    const quality = QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
+    const video = await VideoPipeline.start(adb, { quality, codec: "h264", intraRefresh: true }, serial);
 
     const onGone = () => void this.teardown(serial, "exited");
     const session = new ManagedSession(

@@ -2,7 +2,7 @@
  * Bisect which videoCodecOptions crash the device encoder.
  *   pnpm exec tsx src/tools/probe-options.ts <serial>
  */
-import { DEFAULT_PRESET_ID, presetById } from "@speedcrcpy/shared";
+import { DEFAULT_LADDER_INDEX, QUALITY_LADDER } from "@speedcrcpy/shared";
 import { AdbScrcpyClient, AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import { ScrcpyInstanceId } from "@yume-chan/scrcpy";
 import { setTimeout as delay } from "node:timers/promises";
@@ -21,7 +21,7 @@ const adbManager = new AdbManager(config);
 await adbManager.start();
 const adb = await adbManager.createAdb(serial);
 
-const preset = presetById(DEFAULT_PRESET_ID)!;
+const quality = QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
 
 const variants: [string, string | undefined][] = [
   ["no codec options", undefined],
@@ -39,9 +39,9 @@ for (const [label, codecOptions] of variants) {
       video: true,
       audio: false,
       control: false,
-      maxSize: preset.maxSize,
-      videoBitRate: preset.videoBitRate,
-      maxFps: preset.maxFps,
+      maxSize: quality.maxSize,
+      videoBitRate: quality.videoBitRate,
+      maxFps: quality.maxFps,
       videoCodec: "h264",
       videoCodecOptions: codecOptions,
       clipboardAutosync: false,

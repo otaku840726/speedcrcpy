@@ -354,7 +354,69 @@ input:focus {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
+  padding: 4px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quality-pop {
+  position: relative;
+  display: inline-flex;
+}
+
+.quality-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 190px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+}
+
+.quality-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.quality-row select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
   padding: 4px 6px;
+  min-width: 96px;
+}
+
+.quality-row select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.quality-auto {
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.quality-auto input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 .paste-dialog {

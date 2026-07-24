@@ -7,7 +7,7 @@
  * packet/keyframe/audio statistics. Runs the control instance concurrently to
  * verify dual-scid operation on the device.
  */
-import { DEFAULT_PRESET_ID, presetById } from "@speedcrcpy/shared";
+import { DEFAULT_LADDER_INDEX, QUALITY_LADDER } from "@speedcrcpy/shared";
 import { createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { AdbManager } from "../adb/adb-manager.js";
@@ -39,8 +39,8 @@ session.onAudioPacket((packet) => {
 session.onClipboard((text) => console.log(`[dump] clipboard from device: ${JSON.stringify(text.slice(0, 80))}`));
 
 console.log("[dump] starting video session...");
-const preset = presetById(DEFAULT_PRESET_ID)!;
-const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true }, serial);
+const quality = QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
+const video = await VideoPipeline.start(adb, { quality, codec: "h264", intraRefresh: true }, serial);
 console.log(`[dump] video: ${video.codec} ${video.width}x${video.height}`);
 
 const out = createWriteStream("out.h264");

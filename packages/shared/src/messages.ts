@@ -1,12 +1,14 @@
 /** JSON messages carried on Channel.JSON of a session WebSocket, both directions. */
 
+import type { QualitySettings } from "./presets.js";
+
 export interface VideoMeta {
   codec: "h264" | "h265";
   width: number;
   height: number;
-  presetId: string;
-  /** Browser codec string for VideoDecoder, e.g. "avc1.64002a" (may be refined client-side) */
-  codecString?: string;
+  /** Encoder settings of this stream generation; a change means a new encoder
+   * instance (new SPS/PPS) — the client restarts its decoder on it. */
+  quality: QualitySettings;
 }
 
 export interface AudioMeta {
@@ -31,14 +33,18 @@ export type ClientMessage =
   | { type: "text"; text: string }
   | { type: "navigate"; key: "back" | "home" | "appSwitch" | "power" | "volumeUp" | "volumeDown" }
   | { type: "rotate" }
-  | { type: "setQuality"; presetId: string }
+  /**
+   * Set quality. `auto` true resumes ladder-based adaptation; false pins the
+   * exact settings (resolution / bitrate / fps chosen independently).
+   */
+  | { type: "setQuality"; auto: boolean; quality: QualitySettings }
   | { type: "clipboardSet"; content: string; paste: boolean }
   | { type: "requestKeyframe" }
   | { type: "takeControl" }
   /** Keep the controlled device's physical screen off (lower heat/battery). */
   | { type: "setScreenOff"; off: boolean }
-  /** Viewer capability: don't auto-step above this preset (e.g. software decoders). */
-  | { type: "viewerCaps"; maxPresetId: string }
+  /** Viewer capability: cap auto-adaptation at this ladder index (software decoders). */
+  | { type: "viewerCaps"; maxLadderIndex: number }
   /** Echo of a server `ping`, plus client receive time for delay-gradient estimation */
   | { type: "pong"; pingId: number; serverSentAt: number; clientReceivedAt: number }
   | { type: "decoderError"; detail: string };
@@ -46,17 +52,26 @@ export type ClientMessage =
 // ---- server -> client ----
 
 export type ServerMessage =
-  | { type: "hello"; serial: string; deviceName: string; presetId: string; controlling: boolean; screenOff: boolean }
+  | {
+      type: "hello";
+      serial: string;
+      deviceName: string;
+      auto: boolean;
+      quality: QualitySettings;
+      controlling: boolean;
+      screenOff: boolean;
+    }
   | { type: "screenOffChanged"; off: boolean }
   | { type: "clipboard"; content: string }
-  | { type: "qualityChanged"; presetId: string; auto: boolean }
+  /** `byAuto` true = the adaptation controller changed it (UI shouldn't flip the toggle). */
+  | { type: "qualityChanged"; auto: boolean; quality: QualitySettings; byAuto: boolean }
   | {
       type: "stats";
       encodeBitrate: number;
       sendBitrate: number;
       droppedFrames: number;
       mode: "through" | "gate";
-      presetId: string;
+      quality: QualitySettings;
       rttMs: number;
       delayGradientMs: number;
       congestion: "ok" | "backpressure" | "stalled";

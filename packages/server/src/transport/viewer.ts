@@ -6,7 +6,6 @@ import {
   encodeJsonFrame,
   encodeMetaFrame,
   encodeVideoConfFrame,
-  presetById,
   type AudioMeta,
   type ClientMessage,
   type ServerMessage,
@@ -67,11 +66,11 @@ export class Viewer implements SessionViewer {
       emitStats: (stats) =>
         this.sendJson({
           type: "stats",
-          encodeBitrate: this.session.video.config.preset.videoBitRate,
+          encodeBitrate: this.session.quality.videoBitRate,
           sendBitrate: Math.round(stats.sendBitrate),
           droppedFrames: this.queue.droppedFrames,
           mode: stats.mode,
-          presetId: this.session.presetId,
+          quality: this.session.quality,
           rttMs: Math.round(stats.rttMs),
           delayGradientMs: Math.round(stats.delayGradientMs),
           congestion: stats.congestion,
@@ -99,7 +98,8 @@ export class Viewer implements SessionViewer {
       type: "hello",
       serial: this.session.serial,
       deviceName: this.session.deviceName,
-      presetId: this.session.presetId,
+      auto: this.session.autoAdapt,
+      quality: this.session.quality,
       controlling: this.session.isControlling(this),
       screenOff: this.session.screenOff,
     });
@@ -131,12 +131,27 @@ export class Viewer implements SessionViewer {
   }
 
   /** Quality switch completed: restart the client decoder on the new stream. */
-  notifyVideoRestarted(auto: boolean): void {
+  notifyVideoRestarted(byAuto: boolean): void {
     this.queue.clearVideo();
-    this.sendJson({ type: "qualityChanged", presetId: this.session.presetId, auto });
+    this.sendJson({
+      type: "qualityChanged",
+      auto: this.session.autoAdapt,
+      quality: this.session.quality,
+      byAuto,
+    });
     this.sendVideoMeta();
     // The buffered config + keyframe of the new stream follow through the
     // regular onVideoPacket path right after this call.
+  }
+
+  /** Auto/manual toggled with no stream restart — just sync the client's UI. */
+  notifyQualityMode(): void {
+    this.sendJson({
+      type: "qualityChanged",
+      auto: this.session.autoAdapt,
+      quality: this.session.quality,
+      byAuto: false,
+    });
   }
 
   private detach(): void {
@@ -161,7 +176,7 @@ export class Viewer implements SessionViewer {
       codec: video.codec,
       width: video.width,
       height: video.height,
-      presetId: this.session.presetId,
+      quality: this.session.quality,
     };
     this.queue.enqueueControl(encodeMetaFrame(Channel.VIDEO_META, meta));
   }
@@ -200,7 +215,7 @@ export class Viewer implements SessionViewer {
         return;
       case "viewerCaps":
         // Any viewer may lower the shared encode (worst-viewer-wins policy).
-        this.session.setViewerCap(this, message.maxPresetId);
+        this.session.setViewerCap(this, message.maxLadderIndex);
         return;
       case "pong":
         this.congestion.handlePong(message.pingId, message.serverSentAt, message.clientReceivedAt);
@@ -295,14 +310,9 @@ export class Viewer implements SessionViewer {
       case "clipboardSet":
         void this.session.device.setClipboard(message.content, message.paste).catch(() => {});
         break;
-      case "setQuality": {
-        const preset = presetById(message.presetId);
-        if (preset) {
-          this.session.manualPresetId = preset.id;
-          void this.session.switchQuality(preset, false);
-        }
+      case "setQuality":
+        void this.session.setQualityMode(message.auto, message.quality);
         break;
-      }
       default:
         // Ignore unknown types so old clients stay compatible.
         break;

@@ -1,4 +1,15 @@
-import { QUALITY_LADDER, type ClientMessage, type ServerMessage, type VideoMeta } from "@speedcrcpy/shared";
+import {
+  BITRATE_OPTIONS,
+  DEFAULT_QUALITY,
+  FPS_OPTIONS,
+  qualityLabel,
+  RESOLUTION_OPTIONS,
+  sameQuality,
+  type ClientMessage,
+  type QualitySettings,
+  type ServerMessage,
+  type VideoMeta,
+} from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioPipeline, type AudioState } from "../core/audio-pipeline";
 import { useDeviceList } from "../core/events-socket";
@@ -16,6 +27,9 @@ interface SessionState {
 }
 
 const IS_COARSE_POINTER = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
+
+/** Ladder rung (720p / 2 Mbps / 30) a software decoder caps auto-adaptation at. */
+const SOFTWARE_MAX_LADDER_INDEX = 3;
 
 /** Copy that also works outside secure contexts (plain-HTTP LAN access). */
 function copyTextFallback(text: string): void {
@@ -59,7 +73,8 @@ export function Session({
   const [pasteOpen, setPasteOpen] = useState(false);
   const pasteOpenRef = useRef(false);
   const pasteInputRef = useRef<HTMLTextAreaElement>(null);
-  const [presetId, setPresetId] = useState<string | undefined>();
+  const [auto, setAuto] = useState(true);
+  const [quality, setQuality] = useState<QualitySettings>(DEFAULT_QUALITY);
   const [stats, setStats] = useState<Extract<ServerMessage, { type: "stats" }> | undefined>();
   const [showStats, setShowStats] = useState(false);
   const [controlling, setControlling] = useState(true);
@@ -68,6 +83,16 @@ export function Session({
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
   }, []);
+
+  // Apply a quality choice optimistically (server confirms via qualityChanged).
+  const applyQuality = useCallback(
+    (nextQuality: QualitySettings, nextAuto: boolean) => {
+      setAuto(nextAuto);
+      setQuality(nextQuality);
+      send({ type: "setQuality", auto: nextAuto, quality: nextQuality });
+    },
+    [send],
+  );
 
   // Switch to the device `step` positions away (wraps around).
   const switchBy = useCallback(
@@ -165,7 +190,8 @@ export function Session({
         switch (message.type) {
           case "hello":
             setState((s) => ({ ...s, deviceName: message.deviceName }));
-            setPresetId(message.presetId);
+            setAuto(message.auto);
+            setQuality(message.quality);
             setControlling(message.controlling);
             setScreenOff(message.screenOff);
             break;
@@ -176,7 +202,8 @@ export function Session({
             setScreenOff(message.off);
             break;
           case "qualityChanged":
-            setPresetId(message.presetId);
+            setAuto(message.auto);
+            setQuality(message.quality);
             break;
           case "ping":
             client.send({
@@ -230,16 +257,20 @@ export function Session({
         // the in-stream SPS on their own, so rotation and repeated METAs
         // around RESET_VIDEO must not flicker the screen.
         const unchanged =
-          !forceRestart && started && lastMeta && lastMeta.codec === meta.codec && lastMeta.presetId === meta.presetId;
+          !forceRestart &&
+          started &&
+          lastMeta &&
+          lastMeta.codec === meta.codec &&
+          sameQuality(lastMeta.quality, meta.quality);
         lastMeta = meta;
         if (!unchanged) {
           pipeline.start(meta);
           forceRestart = false;
-          // Software decode can't keep up with high presets — a pushed-too-far
+          // Software decode can't keep up with high rungs — a pushed-too-far
           // decoder janks the main thread, which the server misreads as
-          // network congestion. Cap ourselves at 720p/30 instead.
+          // network congestion. Cap auto-adaptation at the 720p/2M/30 rung.
           if (pipeline.isSoftware) {
-            client.send({ type: "viewerCaps", maxPresetId: "p3" });
+            client.send({ type: "viewerCaps", maxLadderIndex: SOFTWARE_MAX_LADDER_INDEX });
           }
         }
         started = true;
@@ -352,19 +383,7 @@ export function Session({
             <span className="muted" style={{ fontSize: 12 }}>
               {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
             </span>
-        <select
-          value={presetId ?? ""}
-          onChange={(e) => send({ type: "setQuality", presetId: e.target.value })}
-          title="畫質"
-          className="quality-select"
-        >
-          {presetId === undefined && <option value="">…</option>}
-          {QUALITY_LADDER.map((preset) => (
-            <option key={preset.id} value={preset.id}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
+        <QualityControl auto={auto} quality={quality} onApply={applyQuality} />
         <span style={{ flex: 1 }} />
         <button
           title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
@@ -407,7 +426,10 @@ export function Session({
         )}
         {showStats && stats && (
           <div className="stats-overlay">
-            <div>檔位 {stats.presetId} · 模式 {stats.mode === "through" ? "穿透" : "閘控"} · {stats.congestion}</div>
+            <div>
+              {auto ? "自動" : "手動"} {qualityLabel(stats.quality)} · 模式{" "}
+              {stats.mode === "through" ? "穿透" : "閘控"} · {stats.congestion}
+            </div>
             <div>
               編碼 {(stats.encodeBitrate / 1_000_000).toFixed(1)} Mbps · 實送 {(stats.sendBitrate / 1_000_000).toFixed(2)} Mbps
             </div>
@@ -455,6 +477,93 @@ export function Session({
           <NavBar send={send} onShowKeyboard={() => imeRef.current?.focus()} onPaste={pasteToDevice} />
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Quality control: a summary button that opens a popover with an auto-adapt
+ * toggle and three independent dropdowns (resolution / bitrate / fps). The
+ * dropdowns are disabled while auto is on — the congestion controller drives
+ * them — and editing any one drops into manual mode.
+ */
+function QualityControl({
+  auto,
+  quality,
+  onApply,
+}: {
+  auto: boolean;
+  quality: QualitySettings;
+  onApply: (quality: QualitySettings, auto: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Close when clicking anywhere outside the popover.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
+
+  return (
+    <div className="quality-pop" ref={wrapRef}>
+      <button className="quality-select" title="畫質設定" onClick={() => setOpen((v) => !v)}>
+        {auto ? "🅰︎ 自動" : "✋ 手動"} · {qualityLabel(quality)}
+      </button>
+      {open && (
+        <div className="quality-panel">
+          <label className="quality-row quality-auto">
+            <span>自動調適</span>
+            <input type="checkbox" checked={auto} onChange={(e) => onApply(quality, e.target.checked)} />
+          </label>
+          <label className="quality-row">
+            <span>解析度</span>
+            <select
+              value={quality.maxSize}
+              disabled={auto}
+              onChange={(e) => onApply({ ...quality, maxSize: Number(e.target.value) }, false)}
+            >
+              {RESOLUTION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="quality-row">
+            <span>位元率</span>
+            <select
+              value={quality.videoBitRate}
+              disabled={auto}
+              onChange={(e) => onApply({ ...quality, videoBitRate: Number(e.target.value) }, false)}
+            >
+              {BITRATE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="quality-row">
+            <span>FPS</span>
+            <select
+              value={quality.maxFps}
+              disabled={auto}
+              onChange={(e) => onApply({ ...quality, maxFps: Number(e.target.value) }, false)}
+            >
+              {FPS_OPTIONS.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
     </div>
   );
 }
