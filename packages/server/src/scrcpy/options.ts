@@ -12,20 +12,19 @@ import { SCRCPY_SERVER_VERSION } from "./server-binary.js";
  * MediaFormat keys unsupported by an encoder are ignored by Android, so this
  * string is safe to send everywhere; actual support is probed at runtime.
  */
-function videoCodecOptions(maxFps: number, intraRefresh: boolean): string {
-  const options = [
-    "bitrate-mode=2",
-    `i-frame-interval=10`,
-    "max-bframes=0",
-    // Force Baseline profile (AVCProfileBaseline = 1). Many encoders (Qualcomm
-    // on Xiaomi etc.) default to High profile, which the browser software
-    // decoder (TinyH264, used on insecure-context LAN access) CANNOT decode —
-    // the picture goes black. Baseline decodes everywhere (TinyH264, WebCodecs,
-    // hardware); the efficiency loss is negligible for screen content.
-    "profile=1",
-    // Keep emitting frames on a static screen so throughput estimation works.
-    `repeat-previous-frame-after-us=${Math.round(1_000_000 / Math.min(maxFps, 30))}`,
-  ];
+function videoCodecOptions(maxFps: number, intraRefresh: boolean, forceBaseline: boolean): string {
+  const options = ["bitrate-mode=2", `i-frame-interval=10`, "max-bframes=0"];
+  if (forceBaseline) {
+    // Force Baseline profile (AVCProfileBaseline = 1). Devices that default to
+    // High profile (Qualcomm on Xiaomi etc.) can't be decoded by the browser
+    // software decoder (TinyH264, insecure-context LAN) — the picture goes
+    // black. Baseline decodes everywhere. BUT some encoders reject a forced
+    // profile and fail to configure, so VideoPipeline retries without it and
+    // caches that per device (see start()).
+    options.push("profile=1");
+  }
+  // Keep emitting frames on a static screen so throughput estimation works.
+  options.push(`repeat-previous-frame-after-us=${Math.round(1_000_000 / Math.min(maxFps, 30))}`);
   if (intraRefresh) {
     // Refresh the whole picture over ~2 s worth of frames.
     options.push(`intra-refresh-period=${Math.max(2, Math.round(maxFps * 2))}`);
@@ -39,7 +38,7 @@ export interface VideoSessionConfig {
   intraRefresh: boolean;
 }
 
-export function makeVideoOptions(config: VideoSessionConfig) {
+export function makeVideoOptions(config: VideoSessionConfig, forceBaseline: boolean) {
   return new AdbScrcpyOptionsLatest(
     {
       scid: ScrcpyInstanceId.random(),
@@ -50,22 +49,24 @@ export function makeVideoOptions(config: VideoSessionConfig) {
       videoBitRate: config.preset.videoBitRate,
       maxFps: config.preset.maxFps,
       videoCodec: config.codec,
-      videoCodecOptions: videoCodecOptions(config.preset.maxFps, config.intraRefresh),
+      videoCodecOptions: videoCodecOptions(config.preset.maxFps, config.intraRefresh, forceBaseline),
       clipboardAutosync: false,
     },
     { version: SCRCPY_SERVER_VERSION },
   );
 }
 
-export function makeControlOptions() {
+export function makeControlOptions(withAudio = true) {
   return new AdbScrcpyOptionsLatest(
     {
       scid: ScrcpyInstanceId.random(),
       video: false,
-      audio: true,
+      audio: withAudio,
       audioCodec: "opus",
       control: true,
-      clipboardAutosync: true,
+      // Clipboard sync is only meaningful for a real viewer session, not the
+      // idle screen-off keeper.
+      clipboardAutosync: withAudio,
       // With video off, the 64-byte device-name header would land on the
       // audio socket and be misparsed as the audio codec id — don't send it.
       sendDeviceMeta: false,

@@ -167,6 +167,7 @@ export class ManagedSession {
       next = await VideoPipeline.start(
         this.adb,
         { preset, codec: this.video.config.codec, intraRefresh: this.video.config.intraRefresh },
+        this.serial,
         initialListener,
       );
 
@@ -231,15 +232,23 @@ export class SessionManager {
   constructor(
     private readonly adbManager: AdbManager,
     private readonly screenOffDefault = false,
+    /** Notified when a device is taken by / released from a viewer session. */
+    private readonly onSessionActive?: (serial: string, active: boolean) => void,
   ) {}
 
   /** Start (or join) the session for a device. Callers must attach a viewer. */
   acquire(serial: string): Promise<ManagedSession> {
     let pending = this.sessions.get(serial);
     if (!pending) {
+      // Release the idle screen-off keeper before starting our own control
+      // instance, so the two don't fight over the panel.
+      this.onSessionActive?.(serial, true);
       pending = this.create(serial);
       this.sessions.set(serial, pending);
-      pending.catch(() => this.sessions.delete(serial));
+      pending.catch(() => {
+        this.sessions.delete(serial);
+        this.onSessionActive?.(serial, false);
+      });
     }
     return pending;
   }
@@ -256,7 +265,7 @@ export class SessionManager {
 
     const device = await DeviceSession.start(adb);
     const preset: QualityPreset = presetById(DEFAULT_PRESET_ID)!;
-    const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true });
+    const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true }, serial);
 
     const onGone = () => void this.teardown(serial, "exited");
     const session = new ManagedSession(
@@ -279,6 +288,7 @@ export class SessionManager {
   private async teardown(serial: string, reason: string): Promise<void> {
     const pending = this.sessions.get(serial);
     if (!pending) return;
+    this.onSessionActive?.(serial, false);
     this.sessions.delete(serial);
     try {
       const session = await pending;

@@ -1,9 +1,18 @@
 import type { Adb } from "@yume-chan/adb";
 import { AdbScrcpyClient, type AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import { ScrcpyVideoCodecId, type ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
-import type { ReadableStream } from "@yume-chan/stream-extra";
+import type { ReadableStreamDefaultReader } from "@yume-chan/stream-extra";
 import { makeVideoOptions, type VideoSessionConfig } from "./options.js";
 import { pushServer, removeServer } from "./server-binary.js";
+
+/** Devices whose encoder rejected a forced Baseline profile (start()). */
+const baselineUnsupported = new Set<string>();
+
+/** Max wait for the first video metadata before treating the start as failed. */
+const START_TIMEOUT_MS = 5_000;
+/** Max wait for the first actual frame (an encoder that rejected the options
+ * sends metadata then produces nothing). */
+const FRAME_TIMEOUT_MS = 4_000;
 
 export interface VideoPipelineEvents {
   onPacket: (packet: ScrcpyMediaStreamPacket) => void;
@@ -45,23 +54,34 @@ export class VideoPipeline {
    * `initialListener`, when given, is registered before the first packet is
    * consumed — guaranteeing the caller sees the very first config + keyframe
    * (needed for make-before-break quality switches).
+   *
+   * `serial` scopes the forced-Baseline fallback cache: some encoders reject a
+   * forced profile and fail to configure, so we retry without it once and
+   * remember that for the device.
    */
   static async start(
     adb: Adb,
     config: VideoSessionConfig,
+    serial: string,
     initialListener?: VideoPipelineEvents["onPacket"],
   ): Promise<VideoPipeline> {
-    // Unique jar per instance — see pushServer for the unlink race this avoids.
-    const serverPath = await pushServer(adb);
-    let client;
+    const forceBaseline = !baselineUnsupported.has(serial);
+    let started;
     try {
-      client = await AdbScrcpyClient.start(adb, serverPath, makeVideoOptions(config));
+      started = await VideoPipeline.startClient(adb, config, forceBaseline);
     } catch (error) {
-      void removeServer(adb, serverPath);
-      throw error;
+      if (forceBaseline) {
+        // The encoder likely rejected the forced Baseline profile — remember
+        // it for this device and retry with the encoder's native profile.
+        console.warn(`[scrcpy:video] ${serial} rejected forced Baseline, using native profile`);
+        baselineUnsupported.add(serial);
+        started = await VideoPipeline.startClient(adb, config, false);
+      } else {
+        throw error;
+      }
     }
 
-    const video = await client.videoStream;
+    const { client, video, reader, buffered } = started;
     const pipeline = new VideoPipeline(client, config, video.metadata.codec, video.width, video.height);
     if (initialListener) pipeline.packetListeners.add(initialListener);
 
@@ -71,11 +91,71 @@ export class VideoPipeline {
       for (const listener of pipeline.sizeListeners) listener(size);
     });
 
-    void pipeline.consumeVideo(video.stream);
+    void pipeline.consumeVideo(reader, buffered);
     void pipeline.consumeOutput();
     void client.exited.catch(() => {}).then(() => pipeline.handleExit());
 
     return pipeline;
+  }
+
+  /**
+   * Push the server, start a video instance, and confirm it actually produces
+   * frames. An encoder that rejects the codec options still sends metadata
+   * (videoStream resolves), then fails during encode and emits no frames — so
+   * we read until the first data packet before declaring success, buffering
+   * what we read for the pipeline to replay. Metadata timeout, process exit, or
+   * no-frames all reject so the caller can fall back to the native profile.
+   */
+  private static async startClient(adb: Adb, config: VideoSessionConfig, forceBaseline: boolean) {
+    // Unique jar per instance — see pushServer for the unlink race this avoids.
+    const serverPath = await pushServer(adb);
+    let client: AdbScrcpyClient<AdbScrcpyOptionsLatest<true>> | undefined;
+    try {
+      client = await AdbScrcpyClient.start(adb, serverPath, makeVideoOptions(config, forceBaseline));
+      const c = client;
+
+      let metaTimer: NodeJS.Timeout | undefined;
+      const video = await Promise.race([
+        c.videoStream,
+        c.exited.then(() => Promise.reject(new Error("scrcpy exited before video stream"))),
+        new Promise<never>((_, reject) => {
+          metaTimer = setTimeout(() => reject(new Error("video metadata timeout")), START_TIMEOUT_MS);
+        }),
+      ]);
+      if (metaTimer) clearTimeout(metaTimer);
+
+      const reader = video.stream.getReader();
+      const buffered: ScrcpyMediaStreamPacket[] = [];
+      await new Promise<void>((resolve, reject) => {
+        const frameTimer = setTimeout(() => reject(new Error("no video frames")), FRAME_TIMEOUT_MS);
+        void c.exited.then(() => reject(new Error("scrcpy exited before frames"))).catch(() => {});
+        void (async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                reject(new Error("video stream ended before frames"));
+                return;
+              }
+              buffered.push(value);
+              if (value.type === "data") {
+                clearTimeout(frameTimer);
+                resolve();
+                return;
+              }
+            }
+          } catch (error) {
+            reject(error as Error);
+          }
+        })();
+      });
+
+      return { client, video, reader, buffered };
+    } catch (error) {
+      void removeServer(adb, serverPath);
+      await client?.close().catch(() => {});
+      throw error;
+    }
   }
 
   onPacket(listener: VideoPipelineEvents["onPacket"]): () => void {
@@ -119,9 +199,20 @@ export class VideoPipeline {
     await this.client.close();
   }
 
-  private async consumeVideo(stream: ReadableStream<ScrcpyMediaStreamPacket>): Promise<void> {
-    const reader = stream.getReader();
+  /**
+   * @param reader already locked by startClient (which read the first frames).
+   * @param buffered packets startClient consumed while confirming frames; they
+   *   are replayed to listeners before resuming the live read.
+   */
+  private async consumeVideo(
+    reader: ReadableStreamDefaultReader<ScrcpyMediaStreamPacket>,
+    buffered: ScrcpyMediaStreamPacket[],
+  ): Promise<void> {
     try {
+      for (const value of buffered) {
+        if (value.type === "configuration") this.currentConfig = value.data;
+        for (const listener of this.packetListeners) listener(value);
+      }
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;

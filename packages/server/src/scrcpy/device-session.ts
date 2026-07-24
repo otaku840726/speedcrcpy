@@ -32,20 +32,23 @@ export class DeviceSession {
     return controller;
   }
 
-  static async start(adb: Adb): Promise<DeviceSession> {
+  static async start(adb: Adb, options: { audio?: boolean } = {}): Promise<DeviceSession> {
+    const withAudio = options.audio ?? true;
     // Unique jar per instance — see pushServer for the unlink race this avoids.
     const serverPath = await pushServer(adb);
     let client;
     try {
-      client = await AdbScrcpyClient.start(adb, serverPath, makeControlOptions());
+      client = await AdbScrcpyClient.start(adb, serverPath, makeControlOptions(withAudio));
     } catch (error) {
       void removeServer(adb, serverPath);
       throw error;
     }
     const session = new DeviceSession(client);
 
-    void session.consumeAudio();
-    void session.consumeClipboard();
+    if (withAudio) {
+      void session.consumeAudio();
+      void session.consumeClipboard();
+    }
     void session.consumeOutput();
     void client.exited.catch(() => {}).then(() => session.handleExit());
 
@@ -98,11 +101,15 @@ export class DeviceSession {
     await this.client.controller?.setScreenPowerMode(mode).catch(() => {});
   }
 
-  async close(): Promise<void> {
+  /**
+   * @param restore Power the panel back on when closing (default). Pass false
+   * when another instance is about to take over screen-off (keeper → session
+   * handover), so the panel doesn't flicker on.
+   */
+  async close(restore = true): Promise<void> {
     this.closed = true;
     if (this.screenOffTimer) clearInterval(this.screenOffTimer);
-    // Best-effort restore so the user isn't left with a dark phone.
-    if (this.screenOff) {
+    if (restore && this.screenOff) {
       await this.client.controller?.setScreenPowerMode(AndroidScreenPowerMode.Normal).catch(() => {});
     }
     await this.client.close();

@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import { buildApp } from "./http/app.js";
 import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
+import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
@@ -23,7 +24,10 @@ const config = loadConfig();
 const auth = new Auth(config.dataDir, config.password);
 
 const adbManager = new AdbManager(config);
-const sessionManager = new SessionManager(adbManager, config.screenOffDefault);
+const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
+const sessionManager = new SessionManager(adbManager, config.screenOffDefault, (serial, active) =>
+  screenManager.setSessionActive(serial, active),
+);
 const app = await buildApp(config, auth, adbManager);
 
 const gateway = new WsGateway(app, auth);
@@ -34,6 +38,7 @@ registerSessionEndpoint(gateway, sessionManager);
 // unref'd, so it must not be the only thing keeping the process alive.
 await app.listen({ host: config.host, port: config.port });
 await adbManager.start();
+screenManager.start();
 
 app.log.info(`speedcrcpy server ready on ${config.host}:${config.port}`);
 
@@ -43,6 +48,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   app.log.info(`${signal} received, shutting down`);
   await sessionManager.closeAll().catch(() => {});
+  await screenManager.stop().catch(() => {});
   await adbManager.stop().catch(() => {});
   await app.close().catch(() => {});
   process.exit(0);

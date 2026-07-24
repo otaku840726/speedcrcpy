@@ -40,7 +40,7 @@ session.onClipboard((text) => console.log(`[dump] clipboard from device: ${JSON.
 
 console.log("[dump] starting video session...");
 const preset = presetById(DEFAULT_PRESET_ID)!;
-const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true });
+const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true }, serial);
 console.log(`[dump] video: ${video.codec} ${video.width}x${video.height}`);
 
 const out = createWriteStream("out.h264");
