@@ -91,6 +91,93 @@ input:focus {
   font-size: 13px;
 }
 
+.device-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.device-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+/* The identity + controls next to the thumbnail: side by side on wide screens,
+   stacked on narrow ones so they never overlap. */
+.device-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.device-info {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Keep names/IPs on one line and ellipsize — never let them wrap per-glyph. */
+.device-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-sub {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.device-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.device-autoconnect {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* CJK button labels must never break to vertical (鏡像 -> 鏡/像). */
+.device-actions button {
+  white-space: nowrap;
+}
+
+/* Narrow screens: stack the controls under the identity and let them wrap
+   instead of fighting for horizontal space and overlapping. */
+@media (max-width: 560px) {
+  .device-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .device-actions {
+    flex-wrap: wrap;
+  }
+  .device-autoconnect {
+    margin-right: auto;
+  }
+  .device-actions button {
+    flex: 1 1 auto;
+  }
+}
+
 .device-thumb {
   width: 54px;
   height: 96px;

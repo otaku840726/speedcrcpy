@@ -73,36 +73,40 @@ function DeviceCard({
 }) {
   const address = device.address ?? device.serial;
   return (
-    <div className="card" style={{ maxWidth: "none", flexDirection: "row", alignItems: "center", gap: 16, padding: 16 }}>
-      <span style={{ width: 10, height: 10, borderRadius: 5, background: STATE_COLOR[device.state], flexShrink: 0 }} />
+    <div className="device-card">
+      <span className="device-dot" style={{ background: STATE_COLOR[device.state] }} />
       {device.state === "device" && <DeviceThumbnail serial={device.serial} onClick={() => onOpenSession(device.serial)} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>{device.name}</div>
-        <div className="muted" style={{ fontSize: 12 }}>
-          {device.serial} · {STATE_LABEL[device.state]}
+      <div className="device-main">
+        <div className="device-info">
+          <div className="device-name">{device.name}</div>
+          <div className="muted device-sub">
+            {device.serial} · {STATE_LABEL[device.state]}
+          </div>
+        </div>
+        <div className="device-actions">
+          <label className="muted device-autoconnect">
+            <input
+              type="checkbox"
+              checked={device.autoConnect}
+              onChange={(e) => onAction("/api/devices/auto-connect", { address, autoConnect: e.target.checked })}
+            />
+            自動重連
+          </label>
+          {device.state === "device" ? (
+            <>
+              <button className="primary" onClick={() => onOpenSession(device.serial)}>
+                鏡像
+              </button>
+              <button onClick={() => onAction("/api/devices/disconnect", { address })}>斷線</button>
+            </>
+          ) : (
+            <button onClick={() => onAction("/api/devices/connect", { address })}>連線</button>
+          )}
+          <button title="移除此裝置" onClick={() => onAction("/api/devices/forget", { address })}>
+            移除
+          </button>
         </div>
       </div>
-      <label className="muted" style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={device.autoConnect}
-          onChange={(e) => onAction("/api/devices/auto-connect", { address, autoConnect: e.target.checked })}
-        />
-        自動重連
-      </label>
-      {device.state === "device" ? (
-        <>
-          <button className="primary" onClick={() => onOpenSession(device.serial)}>
-            鏡像
-          </button>
-          <button onClick={() => onAction("/api/devices/disconnect", { address })}>斷線</button>
-        </>
-      ) : (
-        <button onClick={() => onAction("/api/devices/connect", { address })}>連線</button>
-      )}
-      <button title="移除此裝置" onClick={() => onAction("/api/devices/forget", { address })}>
-        移除
-      </button>
     </div>
   );
 }
