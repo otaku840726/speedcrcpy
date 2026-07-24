@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
 import type { Config } from "../config.js";
+import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { registerRoutes } from "./routes.js";
 
 export function tokenFromRequest(request: FastifyRequest): string | undefined {
@@ -17,7 +18,12 @@ export function tokenFromRequest(request: FastifyRequest): string | undefined {
   return undefined;
 }
 
-export async function buildApp(config: Config, auth: Auth, adbManager: AdbManager): Promise<FastifyInstance> {
+export async function buildApp(
+  config: Config,
+  auth: Auth,
+  adbManager: AdbManager,
+  thumbnails: ThumbnailManager,
+): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: "info" } });
   await app.register(fastifyCookie);
 
@@ -29,7 +35,7 @@ export async function buildApp(config: Config, auth: Auth, adbManager: AdbManage
     }
   });
 
-  registerRoutes(app, auth, adbManager);
+  registerRoutes(app, auth, adbManager, thumbnails);
 
   // In production the built web app is served by the server itself;
   // in development Vite serves it and proxies /api + /ws here.

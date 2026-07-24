@@ -6,6 +6,7 @@ import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
 import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
+import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
 // device dropping (EPIPE on a closed adb socket, a scrcpy stream ending
@@ -25,10 +26,11 @@ const auth = new Auth(config.dataDir, config.password);
 
 const adbManager = new AdbManager(config);
 const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
+const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterval * 1000);
 const sessionManager = new SessionManager(adbManager, config.screenOffDefault, (serial, active) =>
   screenManager.setSessionActive(serial, active),
 );
-const app = await buildApp(config, auth, adbManager);
+const app = await buildApp(config, auth, adbManager, thumbnailManager);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);
@@ -39,6 +41,7 @@ registerSessionEndpoint(gateway, sessionManager);
 await app.listen({ host: config.host, port: config.port });
 await adbManager.start();
 screenManager.start();
+thumbnailManager.start();
 
 app.log.info(`speedcrcpy server ready on ${config.host}:${config.port}`);
 
@@ -47,6 +50,7 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   app.log.info(`${signal} received, shutting down`);
+  thumbnailManager.stop();
   await sessionManager.closeAll().catch(() => {});
   await screenManager.stop().catch(() => {});
   await adbManager.stop().catch(() => {});

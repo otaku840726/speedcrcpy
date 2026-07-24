@@ -20,6 +20,13 @@ const ConfigSchema = z.object({
     .union([z.boolean(), z.string()])
     .default(false)
     .transform((v) => v === true || v === "true" || v === "1" || v === "yes"),
+  /**
+   * Background thumbnail prefetch cadence in seconds. The server captures a
+   * preview of every connected device on this interval so an opening browser
+   * sees them instantly instead of waiting for a fresh screencap. 0 disables
+   * the background loop (thumbnails are then captured on request only).
+   */
+  thumbnailInterval: z.coerce.number().min(0).default(10),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -47,6 +54,9 @@ export function loadConfig(): Config {
     ...(process.env.SPEEDCRCPY_ADB_HOST ? { adbHost: process.env.SPEEDCRCPY_ADB_HOST } : {}),
     ...(process.env.SPEEDCRCPY_ADB_PORT ? { adbPort: process.env.SPEEDCRCPY_ADB_PORT } : {}),
     ...(process.env.SPEEDCRCPY_SCREEN_OFF ? { screenOffDefault: process.env.SPEEDCRCPY_SCREEN_OFF } : {}),
+    ...(process.env.SPEEDCRCPY_THUMBNAIL_INTERVAL
+      ? { thumbnailInterval: process.env.SPEEDCRCPY_THUMBNAIL_INTERVAL }
+      : {}),
   };
 
   if (typeof merged.password !== "string" || merged.password.length === 0) {
