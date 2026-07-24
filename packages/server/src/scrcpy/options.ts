@@ -17,6 +17,12 @@ function videoCodecOptions(maxFps: number, intraRefresh: boolean): string {
     "bitrate-mode=2",
     `i-frame-interval=10`,
     "max-bframes=0",
+    // Force Baseline profile (AVCProfileBaseline = 1). Many encoders (Qualcomm
+    // on Xiaomi etc.) default to High profile, which the browser software
+    // decoder (TinyH264, used on insecure-context LAN access) CANNOT decode —
+    // the picture goes black. Baseline decodes everywhere (TinyH264, WebCodecs,
+    // hardware); the efficiency loss is negligible for screen content.
+    "profile=1",
     // Keep emitting frames on a static screen so throughput estimation works.
     `repeat-previous-frame-after-us=${Math.round(1_000_000 / Math.min(maxFps, 30))}`,
   ];
