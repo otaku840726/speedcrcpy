@@ -42,6 +42,7 @@ export class AdbManager {
   private reconnectTimer: NodeJS.Timeout | undefined;
   private keepAliveTimer: NodeJS.Timeout | undefined;
   private closed = false;
+  private readonly adbCache = new Map<string, Adb>();
 
   constructor(private readonly config: Config) {
     this.client = new AdbServerClient(
@@ -178,6 +179,21 @@ export class AdbManager {
 
   async createAdb(serial: string): Promise<Adb> {
     return this.client.createAdb({ serial });
+  }
+
+  /**
+   * Cached Adb per serial for lightweight repeated commands (thumbnails).
+   * A broken transport is discarded and recreated on the next call.
+   */
+  async getAdb(serial: string): Promise<Adb> {
+    const cached = this.adbCache.get(serial);
+    if (cached) return cached;
+    const adb = await this.client.createAdb({ serial });
+    this.adbCache.set(serial, adb);
+    void adb.disconnected.finally(() => {
+      if (this.adbCache.get(serial) === adb) this.adbCache.delete(serial);
+    });
+    return adb;
   }
 
   async stop(): Promise<void> {

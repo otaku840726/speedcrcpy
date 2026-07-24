@@ -1,7 +1,50 @@
 import type { DeviceInfo } from "@speedcrcpy/shared";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { useDeviceList } from "../core/events-socket";
+
+const THUMB_REFRESH_MS = 5000;
+
+/**
+ * Live screen preview for a connected device. Double-buffered: each refresh
+ * preloads the new capture off-screen and only swaps it in once loaded, so the
+ * previous frame stays visible during the ~1-2 s capture (no flicker/blank).
+ */
+function DeviceThumbnail({ serial, onClick }: { serial: string; onClick: () => void }) {
+  const [shown, setShown] = useState<string | undefined>();
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      if (document.visibilityState !== "visible") return;
+      const url = `/api/devices/${encodeURIComponent(serial)}/thumbnail?t=${Date.now()}`;
+      const img = new Image();
+      img.onload = () => {
+        if (!cancelled) {
+          setShown(url);
+          setReady(true);
+        }
+      };
+      img.onerror = () => {
+        if (!cancelled && !ready) setReady(false);
+      };
+      img.src = url;
+    };
+    load();
+    const id = window.setInterval(load, THUMB_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [serial]);
+
+  return (
+    <div className="device-thumb" onClick={onClick} title="點擊鏡像">
+      {shown ? <img src={shown} alt="" /> : <span className="device-thumb-placeholder">…</span>}
+    </div>
+  );
+}
 
 const STATE_LABEL: Record<DeviceInfo["state"], string> = {
   device: "已連線",
@@ -74,6 +117,7 @@ function DeviceCard({
   return (
     <div className="card" style={{ maxWidth: "none", flexDirection: "row", alignItems: "center", gap: 16, padding: 16 }}>
       <span style={{ width: 10, height: 10, borderRadius: 5, background: STATE_COLOR[device.state], flexShrink: 0 }} />
+      {device.state === "device" && <DeviceThumbnail serial={device.serial} onClick={() => onOpenSession(device.serial)} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600 }}>{device.name}</div>
         <div className="muted" style={{ fontSize: 12 }}>
