@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- builder: install everything, build web + server, then prune to prod ----
-FROM node:22-bookworm-slim AS builder
+FROM node:22-trixie-slim AS builder
 # CI=true lets pnpm purge node_modules for the prod re-resolve without a TTY prompt.
 ENV CI=true
 RUN corepack enable
@@ -25,12 +25,13 @@ RUN pnpm build
 RUN pnpm install --prod --frozen-lockfile
 
 # ---- runtime: Node + adb, running the built bundle ----
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 
 # adb talks to devices over wireless adb; tini reaps the adb daemon and any
-# scrcpy child processes so the container exits cleanly. Debian's `adb` package
-# (main, Apache-2.0) ships for both amd64 and arm64 — Google's platform-tools
-# zip is amd64-only, so it would break arm64 images.
+# scrcpy child processes so the container exits cleanly. Debian trixie's `adb`
+# (34.0.5, main, Apache-2.0) ships for both amd64 and arm64 AND supports the
+# Android 11+ pairing flow (`adb pair`) — bookworm's 29.0.6 does not, and
+# Google's platform-tools zip is amd64-only, so it would break arm64.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends adb tini \
  && rm -rf /var/lib/apt/lists/*
