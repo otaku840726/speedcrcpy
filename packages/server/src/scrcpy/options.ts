@@ -56,7 +56,7 @@ export function makeVideoOptions(config: VideoSessionConfig, forceBaseline: bool
   );
 }
 
-export function makeControlOptions(withAudio = true) {
+export function makeControlOptions(withAudio = true, powerOffOnClose = false) {
   return new AdbScrcpyOptionsLatest(
     {
       scid: ScrcpyInstanceId.random(),
@@ -67,6 +67,10 @@ export function makeControlOptions(withAudio = true) {
       // Clipboard sync is only meaningful for a real viewer session, not the
       // idle screen-off keeper.
       clipboardAutosync: withAudio,
+      // scrcpy's device-side cleanup powers the screen off when this instance
+      // closes — even on an unclean death (container killed, device dropped) —
+      // so the screen stays off after disconnect instead of being restored.
+      powerOffOnClose,
       // With video off, the 64-byte device-name header would land on the
       // audio socket and be misparsed as the audio codec id — don't send it.
       sendDeviceMeta: false,

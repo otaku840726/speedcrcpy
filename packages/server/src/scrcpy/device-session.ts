@@ -23,6 +23,7 @@ export class DeviceSession {
 
   screenOff = false;
   private screenOffTimer: NodeJS.Timeout | undefined;
+  private powerOffOnClose = false;
 
   private constructor(private readonly client: AdbScrcpyClient<AdbScrcpyOptionsLatest<false>>) {}
 
@@ -32,18 +33,23 @@ export class DeviceSession {
     return controller;
   }
 
-  static async start(adb: Adb, options: { audio?: boolean } = {}): Promise<DeviceSession> {
+  static async start(
+    adb: Adb,
+    options: { audio?: boolean; powerOffOnClose?: boolean } = {},
+  ): Promise<DeviceSession> {
     const withAudio = options.audio ?? true;
+    const powerOffOnClose = options.powerOffOnClose ?? false;
     // Unique jar per instance — see pushServer for the unlink race this avoids.
     const serverPath = await pushServer(adb);
     let client;
     try {
-      client = await AdbScrcpyClient.start(adb, serverPath, makeControlOptions(withAudio));
+      client = await AdbScrcpyClient.start(adb, serverPath, makeControlOptions(withAudio, powerOffOnClose));
     } catch (error) {
       void removeServer(adb, serverPath);
       throw error;
     }
     const session = new DeviceSession(client);
+    session.powerOffOnClose = powerOffOnClose;
 
     if (withAudio) {
       void session.consumeAudio();
@@ -109,7 +115,9 @@ export class DeviceSession {
   async close(restore = true): Promise<void> {
     this.closed = true;
     if (this.screenOffTimer) clearInterval(this.screenOffTimer);
-    if (restore && this.screenOff) {
+    // With powerOffOnClose, scrcpy's cleanup powers the screen off on close —
+    // don't restore it (that's the point: stay off after disconnect).
+    if (restore && this.screenOff && !this.powerOffOnClose) {
       await this.client.controller?.setScreenPowerMode(AndroidScreenPowerMode.Normal).catch(() => {});
     }
     await this.client.close();

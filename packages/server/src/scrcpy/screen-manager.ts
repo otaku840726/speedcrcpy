@@ -73,7 +73,9 @@ export class ScreenManager {
         this.keepers.delete(serial);
         return;
       }
-      const session = await DeviceSession.start(adb, { audio: false });
+      // powerOffOnClose: keep the screen off even if this keeper dies uncleanly
+      // (container killed, device dropped) instead of the panel being restored.
+      const session = await DeviceSession.start(adb, { audio: false, powerOffOnClose: true });
       state.session = session;
       state.starting = false;
       session.setScreenOff(true);

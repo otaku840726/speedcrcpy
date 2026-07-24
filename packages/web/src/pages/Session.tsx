@@ -234,19 +234,17 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
     acquireWakeLock();
     document.addEventListener("visibilitychange", onVisibility);
 
-    // Desktop: keep the hidden IME input focused so typing just works.
-    // Mobile viewers summon the virtual keyboard via the keyboard button.
-    let refocusTimer: number | undefined;
+    // Desktop: focus the hidden IME input when the user clicks the video, so
+    // physical-keyboard text goes to the device. Do NOT steal focus back on
+    // blur — that fights native controls (the quality dropdown would reopen
+    // and immediately close). Mobile viewers use the on-screen keyboard button.
     const ime = imeRef.current;
-    const refocus = () => {
-      // Suspended while the paste dialog is open — its textarea needs focus.
-      if (!IS_COARSE_POINTER && !pasteOpenRef.current) {
-        refocusTimer = window.setTimeout(() => ime?.focus(), 50);
-      }
+    const focusIme = () => {
+      if (!IS_COARSE_POINTER && !pasteOpenRef.current) ime?.focus();
     };
-    if (ime && !IS_COARSE_POINTER) {
-      ime.focus();
-      ime.addEventListener("blur", refocus);
+    if (!IS_COARSE_POINTER) {
+      focusIme();
+      pipeline.element.addEventListener("pointerdown", focusIme);
     }
 
     return () => {
@@ -254,8 +252,7 @@ export function Session({ serial, onBack }: { serial: string; onBack: () => void
       document.removeEventListener("visibilitychange", onVisibility);
       void wakeLock?.release().catch(() => {});
       window.removeEventListener("focus", syncClipboard);
-      if (refocusTimer !== undefined) window.clearTimeout(refocusTimer);
-      ime?.removeEventListener("blur", refocus);
+      pipeline.element.removeEventListener("pointerdown", focusIme);
       client.close();
       audio.dispose();
       audioRef.current = undefined;

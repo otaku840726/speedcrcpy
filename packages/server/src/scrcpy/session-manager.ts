@@ -263,7 +263,9 @@ export class SessionManager {
     const info = this.adbManager.deviceInfos().find((d) => d.serial === serial);
     const adb = await this.adbManager.createAdb(serial);
 
-    const device = await DeviceSession.start(adb);
+    // When screen-off is the standing policy, keep it off after the session
+    // ends / the server dies too (scrcpy powers off on close).
+    const device = await DeviceSession.start(adb, { powerOffOnClose: this.screenOffDefault });
     const preset: QualityPreset = presetById(DEFAULT_PRESET_ID)!;
     const video = await VideoPipeline.start(adb, { preset, codec: "h264", intraRefresh: true }, serial);
 
