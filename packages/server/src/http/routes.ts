@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
+import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 
 const LoginBody = z.object({ password: z.string() });
@@ -15,6 +16,7 @@ export function registerRoutes(
   auth: Auth,
   adbManager: AdbManager,
   thumbnails: ThumbnailManager,
+  stats: DeviceStatsManager,
 ): void {
   app.get("/api/health", async () => ({ ok: true }));
 
@@ -91,6 +93,13 @@ export function registerRoutes(
     const png = await thumbnails.get(serial);
     if (!png) return reply.code(503).send({ error: "capture_failed" });
     return reply.header("Content-Type", "image/png").header("Cache-Control", "no-store").send(png);
+  });
+
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/stats", async (request, reply) => {
+    const cached = stats.get(request.params.serial);
+    // 204 until the first poll lands so the client shows placeholders, not stale data.
+    if (!cached) return reply.code(204).send();
+    return reply.header("Cache-Control", "no-store").send(cached);
   });
 }
 

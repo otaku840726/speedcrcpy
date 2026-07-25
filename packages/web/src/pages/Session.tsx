@@ -12,6 +12,7 @@ import {
 } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioPipeline, type AudioState } from "../core/audio-pipeline";
+import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { useDeviceList } from "../core/events-socket";
 import { attachInput } from "../core/input";
 import { SessionClient } from "../core/session-client";
@@ -67,6 +68,8 @@ export function Session({
   const [wide, setWide] = useState(isWideScreen);
   const [railOpen, setRailOpen] = useState(false);
 
+  const [showDeviceStats, setShowDeviceStats] = useState(true);
+  const deviceStats = useDeviceStats(showDeviceStats ? serial : undefined);
   const allDevices = useDeviceList();
   const connected = (allDevices ?? []).filter((d) => d.state === "device");
   const multiDevice = connected.length > 1;
@@ -395,6 +398,13 @@ export function Session({
         <button title="統計" onClick={() => setShowStats((v) => !v)}>
           📊
         </button>
+        <button
+          title={showDeviceStats ? "隱藏裝置狀態" : "顯示裝置狀態(電量/溫度/CPU/GPU/RAM)"}
+          onClick={() => setShowDeviceStats((v) => !v)}
+          style={showDeviceStats ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+        >
+          🌡️
+        </button>
         {audioState === "locked" && (
           <button title="點擊開啟聲音" onClick={() => void audioRef.current?.unlock()}>
             🔇
@@ -411,6 +421,11 @@ export function Session({
         {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
       </div>
       <div ref={containerRef} className="session-stage">
+        {deviceStats && (
+          <div className="device-stats-overlay">
+            <DeviceStatsChips stats={deviceStats} />
+          </div>
+        )}
         {!wide && multiDevice && (
           <div className="rail-handle" title="切換裝置" onClick={() => setRailOpen(true)} />
         )}

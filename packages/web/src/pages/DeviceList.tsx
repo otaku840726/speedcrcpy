@@ -1,6 +1,7 @@
 import type { DeviceInfo } from "@speedcrcpy/shared";
 import { useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
+import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { DeviceThumbnail } from "../core/DeviceThumbnail";
 import { useDeviceList } from "../core/events-socket";
 
@@ -72,6 +73,7 @@ function DeviceCard({
   onAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const address = device.address ?? device.serial;
+  const stats = useDeviceStats(device.state === "device" ? device.serial : undefined);
   return (
     <div className="device-card">
       <span className="device-dot" style={{ background: STATE_COLOR[device.state] }} />
@@ -82,6 +84,11 @@ function DeviceCard({
           <div className="muted device-sub">
             {device.serial} · {STATE_LABEL[device.state]}
           </div>
+          {stats && (
+            <div className="device-stats">
+              <DeviceStatsChips stats={stats} />
+            </div>
+          )}
         </div>
         <div className="device-actions">
           <label className="muted device-autoconnect">

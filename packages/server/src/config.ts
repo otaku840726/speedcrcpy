@@ -35,6 +35,12 @@ const ConfigSchema = z.object({
    * device encoding video continuously even when nobody is watching.
    */
   sessionLinger: z.coerce.number().min(0).default(60),
+  /**
+   * How often (seconds) to poll device telemetry (battery, temperature, CPU /
+   * GPU / RAM usage) for connected devices. Very light (reads a few sysfs/proc
+   * files). 0 disables telemetry collection entirely.
+   */
+  statsInterval: z.coerce.number().min(0).default(5),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -67,6 +73,9 @@ export function loadConfig(): Config {
       : {}),
     ...(process.env.SPEEDCRCPY_SESSION_LINGER
       ? { sessionLinger: process.env.SPEEDCRCPY_SESSION_LINGER }
+      : {}),
+    ...(process.env.SPEEDCRCPY_STATS_INTERVAL
+      ? { statsInterval: process.env.SPEEDCRCPY_STATS_INTERVAL }
       : {}),
   };
 

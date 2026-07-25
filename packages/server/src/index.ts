@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import { buildApp } from "./http/app.js";
 import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
+import { DeviceStatsManager } from "./scrcpy/device-stats.js";
 import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
@@ -27,13 +28,14 @@ const auth = new Auth(config.dataDir, config.password);
 const adbManager = new AdbManager(config);
 const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
 const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterval * 1000);
+const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1000);
 const sessionManager = new SessionManager(
   adbManager,
   config.screenOffDefault,
   config.sessionLinger * 1000,
   (serial, active) => screenManager.setSessionActive(serial, active),
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);
@@ -45,6 +47,7 @@ await app.listen({ host: config.host, port: config.port });
 await adbManager.start();
 screenManager.start();
 thumbnailManager.start();
+statsManager.start();
 
 app.log.info(`speedcrcpy server ready on ${config.host}:${config.port}`);
 
@@ -54,6 +57,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   app.log.info(`${signal} received, shutting down`);
   thumbnailManager.stop();
+  statsManager.stop();
   await sessionManager.closeAll().catch(() => {});
   await screenManager.stop().catch(() => {});
   await adbManager.stop().catch(() => {});

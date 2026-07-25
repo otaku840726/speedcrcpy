@@ -91,4 +91,18 @@ export interface DeviceInfo {
   autoConnect: boolean;
 }
 
+/** Live device telemetry, refreshed server-side (~5 s). `null` = not readable. */
+export interface DeviceStats {
+  /** Battery charge, 0-100. */
+  battery: number | null;
+  /** Hottest CPU thermal zone, °C. */
+  cpuTemp: number | null;
+  /** CPU utilisation over the sample interval, 0-100 (null on the first sample). */
+  cpuUsage: number | null;
+  /** GPU utilisation, 0-100 (null on non-Qualcomm / unreadable GPUs). */
+  gpuUsage: number | null;
+  ramUsedKb: number | null;
+  ramTotalKb: number | null;
+}
+
 export type EventsMessage = { type: "devices"; devices: DeviceInfo[] };

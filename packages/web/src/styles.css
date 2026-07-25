@@ -169,13 +169,28 @@ input:focus {
   }
   .device-actions {
     flex-wrap: wrap;
+    gap: 5px;
   }
   .device-autoconnect {
     margin-right: auto;
+    font-size: 11px;
   }
+  /* Compact buttons (no flex-grow) so 鏡像/斷線/移除 stay together on one line. */
   .device-actions button {
-    flex: 1 1 auto;
+    padding: 6px 8px;
+    font-size: 13px;
   }
+}
+
+/* Telemetry chips under the device identity (list) — wrap on narrow cards. */
+.device-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .device-thumb {
@@ -443,6 +458,27 @@ input:focus {
   border-radius: 6px;
   padding: 4px 8px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Telemetry readout, top-right of the mirror stage (clears the toggled perf
+   overlay at top-left). No background box — a text shadow keeps it legible over
+   any frame while blocking as little of the picture as possible. */
+.device-stats-overlay {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  max-width: 62%;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-shadow: 0 1px 2px #000, 0 0 4px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 3px 10px;
 }
 
 .quality-pop {
