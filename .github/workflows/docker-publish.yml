@@ -62,4 +62,4 @@ jobs:
           url: "${{ secrets.WATCHTOWER_URL }}"
           api_token: "${{ secrets.WATCHTOWER_API_TOKEN }}"
           # 在這裡指定你的 Docker Image 名稱與標籤
-          images: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          images: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
