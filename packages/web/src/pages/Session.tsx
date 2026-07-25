@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AudioPipeline, type AudioState } from "../core/audio-pipeline";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { useDeviceList } from "../core/events-socket";
+import { Icon } from "../core/icons";
 import { attachInput } from "../core/input";
 import { SessionClient } from "../core/session-client";
 import { VideoPipeline } from "../core/video-pipeline";
@@ -383,38 +384,39 @@ export function Session({
                 ›
               </button>
             )}
-            <span className="muted" style={{ fontSize: 12 }}>
+            <span className="muted topbar-size" style={{ fontSize: 12 }}>
               {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
             </span>
         <QualityControl auto={auto} quality={quality} onApply={applyQuality} />
         <span style={{ flex: 1 }} />
-        <button
-          title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
-          onClick={() => send({ type: "setScreenOff", off: !screenOff })}
-          style={screenOff ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
-        >
-          {screenOff ? "🌙" : "☀"}
-        </button>
-        <button title="統計" onClick={() => setShowStats((v) => !v)}>
-          📊
-        </button>
-        <button
-          title={showDeviceStats ? "隱藏裝置狀態" : "顯示裝置狀態(電量/溫度/CPU/GPU/RAM)"}
-          onClick={() => setShowDeviceStats((v) => !v)}
-          style={showDeviceStats ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
-        >
-          🌡️
-        </button>
-        {audioState === "locked" && (
-          <button title="點擊開啟聲音" onClick={() => void audioRef.current?.unlock()}>
-            🔇
+        <div className="topbar-tools">
+          <button
+            title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
+            onClick={() => send({ type: "setScreenOff", off: !screenOff })}
+            style={screenOff ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+          >
+            <Icon name={screenOff ? "moon" : "brightness"} />
           </button>
-        )}
-        {audioState === "unavailable" && (
-          <span className="muted" title="此瀏覽器不支援音訊解碼(iOS 需 Safari 26+)">
-            🔇
-          </span>
-        )}
+          <button title="連線效能(位元率/RTT/壅塞)" onClick={() => setShowStats((v) => !v)}>
+            <Icon name="reception" />
+          </button>
+          <button
+            title={showDeviceStats ? "隱藏裝置狀態" : "顯示裝置狀態(電量/溫度/CPU/GPU/RAM)"}
+            onClick={() => setShowDeviceStats((v) => !v)}
+          >
+            <Icon name="motherboard" />
+          </button>
+          {audioState === "locked" && (
+            <button title="點擊開啟聲音" onClick={() => void audioRef.current?.unlock()}>
+              <Icon name="volumeMute" />
+            </button>
+          )}
+          {audioState === "unavailable" && (
+            <span className="muted topbar-tools-icon" title="此瀏覽器不支援音訊解碼(iOS 需 Safari 26+)">
+              <Icon name="volumeMute" />
+            </span>
+          )}
+        </div>
         {state.status === "connecting" && <span className="muted">連線中…</span>}
         {state.status === "reconnecting" && <span style={{ color: "#f0a94b", fontSize: 13 }}>重新連線中…</span>}
         {state.status === "gone" && <span className="error-text">裝置離線,等待重連…</span>}
@@ -595,34 +597,34 @@ function NavBar({
   return (
     <div className="session-navbar">
       <button title="音量-" onClick={() => send({ type: "navigate", key: "volumeDown" })}>
-        🔉
+        <Icon name="volumeDown" size={18} />
       </button>
       <button title="音量+" onClick={() => send({ type: "navigate", key: "volumeUp" })}>
-        🔊
+        <Icon name="volumeUp" size={18} />
       </button>
       <button title="電源" onClick={() => send({ type: "navigate", key: "power" })}>
-        ⏻
+        <Icon name="power" size={18} />
       </button>
       <button title="把本機剪貼簿貼到手機" onClick={onPaste}>
-        📋
+        <Icon name="clipboard" size={18} />
       </button>
       <span style={{ flex: 1 }} />
       <button title="返回" onClick={() => send({ type: "navigate", key: "back" })}>
-        ◀
+        <Icon name="back" size={18} />
       </button>
       <button title="主畫面" onClick={() => send({ type: "navigate", key: "home" })}>
-        ●
+        <Icon name="home" size={16} />
       </button>
       <button title="多工" onClick={() => send({ type: "navigate", key: "appSwitch" })}>
-        ■
+        <Icon name="recents" size={15} />
       </button>
       <span style={{ flex: 1 }} />
       <button title="旋轉" onClick={() => send({ type: "rotate" })}>
-        ⟳
+        <Icon name="rotate" size={18} />
       </button>
       {IS_COARSE_POINTER && (
         <button title="鍵盤" onClick={onShowKeyboard}>
-          ⌨
+          <Icon name="keyboard" size={18} />
         </button>
       )}
     </div>

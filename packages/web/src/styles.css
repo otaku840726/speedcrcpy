@@ -193,6 +193,13 @@ input:focus {
   font-variant-numeric: tabular-nums;
 }
 
+/* Each chip: icon + value, vertically centred with a small gap. */
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .device-thumb {
   width: 54px;
   height: 96px;
@@ -361,6 +368,38 @@ input:focus {
   flex-shrink: 0;
 }
 
+/* Icon toggles kept together so they never split across wrapped rows. */
+.topbar-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Centre the SVG glyph within each toggle button. */
+.topbar-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Narrow screens: drop the redundant size readout and tighten the toggles so
+   the whole bar fits without a lone button wrapping to its own row. */
+@media (max-width: 560px) {
+  .session-topbar {
+    gap: 6px 8px;
+    padding: 8px;
+  }
+  .topbar-size {
+    display: none;
+  }
+  .topbar-tools {
+    gap: 6px;
+  }
+  .topbar-tools button {
+    padding: 6px 9px;
+  }
+}
+
 .session-stage {
   flex: 1;
   min-height: 0;
@@ -394,6 +433,15 @@ input:focus {
   min-width: 44px;
   font-size: 16px;
   line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Audio-unavailable indicator is a plain span, not a button — align its icon. */
+.topbar-tools-icon {
+  display: inline-flex;
+  align-items: center;
 }
 
 /* Narrow screens: let the buttons share the width instead of overflowing. */
