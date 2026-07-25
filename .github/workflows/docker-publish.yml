@@ -55,3 +55,11 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          
+      - name: Trigger Watchtower Update
+        uses: darnfish/watchtower-update@v3.3
+        with:
+          url: "${{ secrets.WATCHTOWER_URL }}"
+          api_token: "${{ secrets.WATCHTOWER_API_TOKEN }}"
+          # 在這裡指定你的 Docker Image 名稱與標籤
+          images: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
