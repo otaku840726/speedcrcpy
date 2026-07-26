@@ -100,6 +100,7 @@ export class Viewer implements SessionViewer {
       deviceName: this.session.deviceName,
       auto: this.session.autoAdapt,
       quality: this.session.quality,
+      codec: this.session.videoCodec,
       controlling: this.session.isControlling(this),
       screenOff: this.session.screenOff,
     });
@@ -312,6 +313,9 @@ export class Viewer implements SessionViewer {
         break;
       case "setQuality":
         void this.session.setQualityMode(message.auto, message.quality);
+        break;
+      case "setCodec":
+        void this.session.setCodec(message.codec);
         break;
       default:
         // Ignore unknown types so old clients stay compatible.

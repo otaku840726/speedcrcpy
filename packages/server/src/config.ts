@@ -41,6 +41,13 @@ const ConfigSchema = z.object({
    * files). 0 disables telemetry collection entirely.
    */
   statsInterval: z.coerce.number().min(0).default(5),
+  /**
+   * Video codec the device encodes. h265 cuts ~30-40% bitrate for the same
+   * quality (a real win on weak networks) but needs the client to decode HEVC
+   * (WebCodecs — hardware-dependent; the TinyH264 software fallback is
+   * H.264-only, so insecure-context LAN clients must stay on h264).
+   */
+  videoCodec: z.enum(["h264", "h265"]).default("h264"),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -77,6 +84,7 @@ export function loadConfig(): Config {
     ...(process.env.SPEEDCRCPY_STATS_INTERVAL
       ? { statsInterval: process.env.SPEEDCRCPY_STATS_INTERVAL }
       : {}),
+    ...(process.env.SPEEDCRCPY_VIDEO_CODEC ? { videoCodec: process.env.SPEEDCRCPY_VIDEO_CODEC } : {}),
   };
 
   if (typeof merged.password !== "string" || merged.password.length === 0) {

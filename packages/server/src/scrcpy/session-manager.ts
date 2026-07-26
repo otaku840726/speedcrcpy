@@ -4,6 +4,7 @@ import {
   QUALITY_LADDER,
   sameQuality,
   type QualitySettings,
+  type VideoCodec,
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
@@ -35,6 +36,8 @@ export class ManagedSession {
   autoAdapt = true;
   /** Encoder settings the video pipeline is currently running at. */
   quality: QualitySettings;
+  /** Codec the video pipeline is currently encoding ("h264" | "h265"). */
+  videoCodec: VideoCodec;
   /** Auto mode's current ladder rung (ignored while autoAdapt is false). */
   autoLadderIdx: number;
   readonly congestion: SessionCongestion;
@@ -59,10 +62,11 @@ export class ManagedSession {
      * <= 0 keeps it warm indefinitely (torn down only when the device drops).
      */
     private readonly lingerMs: number,
-    /** Persist the user's quality choice so it survives a session teardown. */
-    private readonly onQualityPersist: (auto: boolean, quality: QualitySettings) => void,
+    /** Persist the user's quality/codec choice so it survives a session teardown. */
+    private readonly onQualityPersist: (auto: boolean, quality: QualitySettings, codec: VideoCodec) => void,
   ) {
     this.quality = video.config.quality;
+    this.videoCodec = video.config.codec;
     this.autoLadderIdx = nearestLadderIndex(video.config.quality);
     this.wireVideo(video);
     this.congestion = new SessionCongestion(this);
@@ -176,7 +180,7 @@ export class ManagedSession {
     } else {
       target = quality;
     }
-    this.onQualityPersist(auto, target);
+    this.onQualityPersist(auto, target, this.videoCodec);
 
     if (sameQuality(target, this.quality)) {
       // Encoder unchanged — just broadcast the flipped mode so viewers' toggles
@@ -185,6 +189,13 @@ export class ManagedSession {
       return;
     }
     await this.switchQuality(target, false);
+  }
+
+  /** Switch the device encoder codec live (persisted; make-before-break restart). */
+  async setCodec(codec: VideoCodec): Promise<void> {
+    if (codec === this.videoCodec) return;
+    this.onQualityPersist(this.autoAdapt, this.quality, codec);
+    await this.switchQuality(this.quality, false, codec);
   }
 
   /** Step auto mode to a ladder rung (congestion controller / viewer cap). */
@@ -199,8 +210,8 @@ export class ManagedSession {
    * fan-out source, then kill the old instance. Input, audio and clipboard
    * live in the persistent DeviceSession and are never touched.
    */
-  async switchQuality(quality: QualitySettings, byAuto: boolean): Promise<boolean> {
-    if (this.switching || sameQuality(quality, this.quality)) return false;
+  async switchQuality(quality: QualitySettings, byAuto: boolean, codec: VideoCodec = this.videoCodec): Promise<boolean> {
+    if (this.switching || (sameQuality(quality, this.quality) && codec === this.videoCodec)) return false;
     this.switching = true;
 
     // Buffer everything the new encoder emits until we're ready to swap, so
@@ -224,7 +235,7 @@ export class ManagedSession {
       // the process or disturb the still-running current pipeline.
       next = await VideoPipeline.start(
         this.adb,
-        { quality, codec: this.video.config.codec, intraRefresh: this.video.config.intraRefresh },
+        { quality, codec, intraRefresh: this.video.config.intraRefresh },
         this.serial,
         initialListener,
       );
@@ -240,6 +251,7 @@ export class ManagedSession {
       const old = this.video;
       this.video = next;
       this.quality = quality;
+      this.videoCodec = codec;
 
       // Swap: stop forwarding the old stream, tell viewers to restart their
       // decoders, replay the buffered config+keyframe, then go live.
@@ -288,14 +300,19 @@ export class ManagedSession {
 
 export class SessionManager {
   private readonly sessions = new Map<string, Promise<ManagedSession>>();
-  /** Last quality choice per device, so a new session restores it. */
-  private readonly deviceQuality = new Map<string, { auto: boolean; quality: QualitySettings }>();
+  /** Last quality/codec choice per device, so a new session restores it. */
+  private readonly deviceQuality = new Map<
+    string,
+    { auto: boolean; quality: QualitySettings; codec: VideoCodec }
+  >();
 
   constructor(
     private readonly adbManager: AdbManager,
     private readonly screenOffDefault = false,
     /** Warm-linger after the last viewer leaves (ms); <= 0 = keep warm forever. */
     private readonly sessionLingerMs = 60_000,
+    /** Default codec new sessions encode with ("h264" | "h265"). */
+    private readonly videoCodec: VideoCodec = "h264",
     /** Notified when a device is taken by / released from a viewer session. */
     private readonly onSessionActive?: (serial: string, active: boolean) => void,
   ) {}
@@ -340,7 +357,8 @@ export class SessionManager {
         ? QUALITY_LADDER[nearestLadderIndex(stored.quality)]!
         : stored.quality
       : QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
-    const video = await VideoPipeline.start(adb, { quality, codec: "h264", intraRefresh: true }, serial);
+    const codec = stored?.codec ?? this.videoCodec;
+    const video = await VideoPipeline.start(adb, { quality, codec, intraRefresh: true }, serial);
 
     const onGone = () => void this.teardown(serial, "exited");
     const session = new ManagedSession(
@@ -352,7 +370,7 @@ export class SessionManager {
       () => void this.teardown(serial, "idle"),
       onGone,
       this.sessionLingerMs,
-      (auto, q) => this.deviceQuality.set(serial, { auto, quality: q }),
+      (auto, q, c) => this.deviceQuality.set(serial, { auto, quality: q, codec: c }),
     );
     session.autoAdapt = startAuto;
     device.onExit(onGone);

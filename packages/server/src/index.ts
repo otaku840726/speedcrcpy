@@ -33,6 +33,7 @@ const sessionManager = new SessionManager(
   adbManager,
   config.screenOffDefault,
   config.sessionLinger * 1000,
+  config.videoCodec,
   (serial, active) => screenManager.setSessionActive(serial, active),
 );
 const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager);

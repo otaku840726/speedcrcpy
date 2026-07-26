@@ -8,6 +8,7 @@ import {
   type ClientMessage,
   type QualitySettings,
   type ServerMessage,
+  type VideoCodec,
   type VideoMeta,
 } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -79,6 +80,7 @@ export function Session({
   const pasteInputRef = useRef<HTMLTextAreaElement>(null);
   const [auto, setAuto] = useState(true);
   const [quality, setQuality] = useState<QualitySettings>(DEFAULT_QUALITY);
+  const [codec, setCodec] = useState<VideoCodec>("h264");
   const [stats, setStats] = useState<Extract<ServerMessage, { type: "stats" }> | undefined>();
   const [showStats, setShowStats] = useState(false);
   const [controlling, setControlling] = useState(true);
@@ -94,6 +96,15 @@ export function Session({
       setAuto(nextAuto);
       setQuality(nextQuality);
       send({ type: "setQuality", auto: nextAuto, quality: nextQuality });
+    },
+    [send],
+  );
+
+  // Live codec switch (server restarts the encoder make-before-break).
+  const applyCodec = useCallback(
+    (next: VideoCodec) => {
+      setCodec(next);
+      send({ type: "setCodec", codec: next });
     },
     [send],
   );
@@ -196,6 +207,7 @@ export function Session({
             setState((s) => ({ ...s, deviceName: message.deviceName }));
             setAuto(message.auto);
             setQuality(message.quality);
+            setCodec(message.codec);
             setControlling(message.controlling);
             setScreenOff(message.screenOff);
             break;
@@ -267,6 +279,7 @@ export function Session({
           lastMeta.codec === meta.codec &&
           sameQuality(lastMeta.quality, meta.quality);
         lastMeta = meta;
+        setCodec(meta.codec);
         if (!unchanged) {
           pipeline.start(meta);
           forceRestart = false;
@@ -387,7 +400,13 @@ export function Session({
             <span className="muted topbar-size" style={{ fontSize: 12 }}>
               {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
             </span>
-        <QualityControl auto={auto} quality={quality} onApply={applyQuality} />
+        <QualityControl
+          auto={auto}
+          quality={quality}
+          codec={codec}
+          onApply={applyQuality}
+          onSetCodec={applyCodec}
+        />
         <span style={{ flex: 1 }} />
         <div className="topbar-tools">
           <button
@@ -507,14 +526,37 @@ export function Session({
 function QualityControl({
   auto,
   quality,
+  codec,
   onApply,
+  onSetCodec,
 }: {
   auto: boolean;
   quality: QualitySettings;
+  codec: VideoCodec;
   onApply: (quality: QualitySettings, auto: boolean) => void;
+  onSetCodec: (codec: VideoCodec) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [hevcOk, setHevcOk] = useState(true);
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Only offer H.265 if this browser can actually decode HEVC (WebCodecs,
+  // hardware-dependent) — otherwise selecting it would blank the picture.
+  useEffect(() => {
+    let cancelled = false;
+    const VD = (globalThis as { VideoDecoder?: { isConfigSupported(c: { codec: string }): Promise<{ supported?: boolean }> } })
+      .VideoDecoder;
+    if (!VD) {
+      setHevcOk(false);
+      return;
+    }
+    void VD.isConfigSupported({ codec: "hev1.1.6.L93.B0" })
+      .then((r) => !cancelled && setHevcOk(r.supported === true))
+      .catch(() => !cancelled && setHevcOk(false));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Close when clicking anywhere outside the popover.
   useEffect(() => {
@@ -536,6 +578,15 @@ function QualityControl({
           <label className="quality-row quality-auto">
             <span>自動調適</span>
             <input type="checkbox" checked={auto} onChange={(e) => onApply(quality, e.target.checked)} />
+          </label>
+          <label className="quality-row">
+            <span>編碼</span>
+            <select value={codec} onChange={(e) => onSetCodec(e.target.value as VideoCodec)}>
+              <option value="h264">H.264</option>
+              <option value="h265" disabled={!hevcOk}>
+                {hevcOk ? "H.265 (省頻寬)" : "H.265 (本機不支援)"}
+              </option>
+            </select>
           </label>
           <label className="quality-row">
             <span>解析度</span>

@@ -2,8 +2,10 @@
 
 import type { QualitySettings } from "./presets.js";
 
+export type VideoCodec = "h264" | "h265";
+
 export interface VideoMeta {
-  codec: "h264" | "h265";
+  codec: VideoCodec;
   width: number;
   height: number;
   /** Encoder settings of this stream generation; a change means a new encoder
@@ -38,6 +40,8 @@ export type ClientMessage =
    * exact settings (resolution / bitrate / fps chosen independently).
    */
   | { type: "setQuality"; auto: boolean; quality: QualitySettings }
+  /** Switch the device encoder codec live (make-before-break restart). */
+  | { type: "setCodec"; codec: VideoCodec }
   | { type: "clipboardSet"; content: string; paste: boolean }
   | { type: "requestKeyframe" }
   | { type: "takeControl" }
@@ -58,6 +62,7 @@ export type ServerMessage =
       deviceName: string;
       auto: boolean;
       quality: QualitySettings;
+      codec: VideoCodec;
       controlling: boolean;
       screenOff: boolean;
     }

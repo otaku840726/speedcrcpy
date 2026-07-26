@@ -65,7 +65,9 @@ export class VideoPipeline {
     serial: string,
     initialListener?: VideoPipelineEvents["onPacket"],
   ): Promise<VideoPipeline> {
-    const forceBaseline = !baselineUnsupported.has(serial);
+    // Forced Baseline is an H.264 concept (for the TinyH264 software decoder);
+    // it doesn't apply to H.265, so never force it there.
+    const forceBaseline = config.codec === "h264" && !baselineUnsupported.has(serial);
     let started;
     try {
       started = await VideoPipeline.startClient(adb, config, forceBaseline);
