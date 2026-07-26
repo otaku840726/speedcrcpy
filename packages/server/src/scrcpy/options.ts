@@ -71,6 +71,13 @@ export function makeControlOptions(withAudio = true, powerOffOnClose = false) {
       // closes — even on an unclean death (container killed, device dropped) —
       // so the screen stays off after disconnect instead of being restored.
       powerOffOnClose,
+      // Keep the device from dozing (which drops wireless adb) while connected.
+      // STAY_ON_WHILE_PLUGGED_IN only holds while charging — fine for the
+      // dedicated, always-plugged devices this serves. Combined with the forced
+      // display-off above it yields "awake but dark". Applies to both the viewer
+      // session and the 24/7 screen-off keeper, so devices stay reachable even
+      // when nobody is watching.
+      stayAwake: true,
       // With video off, the 64-byte device-name header would land on the
       // audio socket and be misparsed as the audio codec id — don't send it.
       sendDeviceMeta: false,
