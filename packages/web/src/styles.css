@@ -716,10 +716,6 @@ input:focus {
   font-size: 12px;
   padding: 5px 12px;
 }
-.qd-acts button.primary {
-  color: var(--accent);
-  border-color: var(--accent);
-}
 .qd-foot {
   font-size: 10px;
   color: #f0a94b;
