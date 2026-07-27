@@ -86,10 +86,20 @@ export function Session({
   const [controlling, setControlling] = useState(true);
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
+  const [controlHint, setControlHint] = useState(false);
+  const hintTimerRef = useRef<number | undefined>(undefined);
 
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
   }, []);
+
+  // View-mode tap on the video: flash a brief "take control" hint, then fade.
+  const showControlHint = useCallback(() => {
+    setControlHint(true);
+    if (hintTimerRef.current) window.clearTimeout(hintTimerRef.current);
+    hintTimerRef.current = window.setTimeout(() => setControlHint(false), 2000);
+  }, []);
+  useEffect(() => () => window.clearTimeout(hintTimerRef.current), []);
 
   // Apply a quality choice optimistically (server confirms via qualityChanged).
   const applyQuality = useCallback(
@@ -427,6 +437,15 @@ export function Session({
         <span style={{ flex: 1 }} />
         <div className="topbar-tools">
           <button
+            className={`mode-btn ${controlling ? "controlling" : "viewing"}`}
+            title={controlling ? "你正在控制此裝置" : "目前為檢視模式 — 點擊取得控制權"}
+            onClick={() => {
+              if (!controlling) send({ type: "takeControl" });
+            }}
+          >
+            {controlling ? "控制中" : "取得控制"}
+          </button>
+          <button
             title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
             onClick={() => send({ type: "setScreenOff", off: !screenOff })}
             style={screenOff ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
@@ -493,9 +512,16 @@ export function Session({
           </div>
         )}
         {!controlling && (
-          <button className="clipboard-toast" style={{ top: 16, bottom: "auto" }} onClick={() => send({ type: "takeControl" })}>
-            檢視模式 — 點擊取得控制權
-          </button>
+          <>
+            {/* Transparent catcher: taps on the video (ignored server-side in
+                view mode) flash the hint instead of silently doing nothing. */}
+            <div className="view-catch" onClick={showControlHint} />
+            {controlHint && (
+              <button className="control-hint" onClick={() => send({ type: "takeControl" })}>
+                檢視模式 — 點擊取得控制權
+              </button>
+            )}
+          </>
         )}
         {clipboardToast !== undefined && (
           <button

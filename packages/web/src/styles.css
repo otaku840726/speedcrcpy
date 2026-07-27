@@ -698,3 +698,43 @@ input:focus {
   border-color: var(--accent);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
+
+/* Topbar control-mode toggle: green when controlling, amber (actionable) in view mode. */
+.mode-btn {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mode-btn.controlling {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.mode-btn.viewing {
+  color: #f0a94b;
+  border-color: #f0a94b;
+}
+
+/* View-mode: transparent tap catcher over the video, and a transient hint. */
+.view-catch {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: pointer;
+}
+.control-hint {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  background: var(--panel);
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  animation: control-hint-fade 2s ease forwards;
+}
+@keyframes control-hint-fade {
+  0% { opacity: 0; }
+  8% { opacity: 1; }
+  72% { opacity: 1; }
+  100% { opacity: 0; }
+}
