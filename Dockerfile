@@ -36,7 +36,13 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends adb tini \
  && rm -rf /var/lib/apt/lists/*
 
+# Build identity, injected by CI (docker build --build-arg). Exposed on
+# /api/health so tooling can tell which build a running instance is on.
+ARG GIT_SHA=dev
+ARG BUILD_TIME=
 ENV NODE_ENV=production \
+    SPEEDCRCPY_VERSION=$GIT_SHA \
+    SPEEDCRCPY_BUILT_AT=$BUILD_TIME \
     SPEEDCRCPY_DATA_DIR=/data \
     SPEEDCRCPY_HOST=0.0.0.0 \
     SPEEDCRCPY_PORT=8000 \

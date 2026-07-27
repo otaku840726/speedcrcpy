@@ -5,6 +5,7 @@ import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
+import { BUILT_AT, VERSION } from "../version.js";
 
 const LoginBody = z.object({ password: z.string() });
 const AddressBody = z.object({ address: z.string().min(3) });
@@ -18,7 +19,9 @@ export function registerRoutes(
   thumbnails: ThumbnailManager,
   stats: DeviceStatsManager,
 ): void {
-  app.get("/api/health", async () => ({ ok: true }));
+  // Unauthenticated (see the auth hook exemption) so deployment tooling can
+  // poll which build is live without a token. `version` is the git SHA.
+  app.get("/api/health", async () => ({ ok: true, version: VERSION, builtAt: BUILT_AT }));
 
   app.post("/api/login", async (request, reply) => {
     const body = LoginBody.safeParse(request.body);

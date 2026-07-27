@@ -86,7 +86,10 @@ export class WtGateway {
         }
         this.sessionManager
           .acquire(serial)
-          .then((managed) => new Viewer(sink, managed).attach())
+          .then((managed) => {
+            console.log(`[wt] viewer attached over WebTransport for ${serial}`);
+            new Viewer(sink, managed).attach();
+          })
           .catch((error: unknown) => {
             console.error(`[wt] failed to start ${serial}:`, error instanceof Error ? error.message : error);
             sink.close();

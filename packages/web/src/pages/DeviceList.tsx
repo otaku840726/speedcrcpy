@@ -1,5 +1,5 @@
 import type { DeviceInfo } from "@speedcrcpy/shared";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { DeviceThumbnail } from "../core/DeviceThumbnail";
@@ -24,6 +24,16 @@ const STATE_COLOR: Record<DeviceInfo["state"], string> = {
 export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) => void }) {
   const devices = useDeviceList();
   const [error, setError] = useState("");
+  const [build, setBuild] = useState<{ version: string; builtAt: string }>();
+
+  // /api/health is unauthenticated — surface the running build (git SHA) so
+  // it's clear which version is deployed.
+  useEffect(() => {
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((d: { version?: string; builtAt?: string }) => setBuild({ version: d.version ?? "", builtAt: d.builtAt ?? "" }))
+      .catch(() => {});
+  }, []);
 
   async function action(path: string, body: Record<string, unknown>) {
     setError("");
@@ -45,6 +55,15 @@ export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) 
       <header style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
         <h1 style={{ margin: 0, fontSize: 22 }}>speedcrcpy</h1>
         <span className="muted">裝置</span>
+        {build?.version && (
+          <span
+            className="muted"
+            style={{ marginLeft: "auto", fontSize: 11, fontFamily: "monospace" }}
+            title={build.builtAt ? `build ${build.version}\n${build.builtAt}` : `build ${build.version}`}
+          >
+            {build.version === "dev" ? "dev" : build.version.slice(0, 7)}
+          </span>
+        )}
       </header>
 
       <ConnectForm onConnect={(address) => action("/api/devices/connect", { address })} onPair={(address, code) => action("/api/devices/pair", { address, code })} />
