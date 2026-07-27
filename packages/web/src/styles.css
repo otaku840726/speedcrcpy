@@ -424,12 +424,29 @@ input:focus {
 
 .session-topbar {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+.topbar-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.topbar-name {
+  font-weight: 600;
+}
+.topbar-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.mute-btn.muted {
+  color: #f0a94b;
+  border-color: #f0a94b;
 }
 
 /* Icon toggles kept together so they never split across wrapped rows. */
@@ -450,8 +467,10 @@ input:focus {
    the whole bar fits without a lone button wrapping to its own row. */
 @media (max-width: 560px) {
   .session-topbar {
-    gap: 6px 8px;
-    padding: 8px;
+    padding: 6px 8px;
+  }
+  .topbar-line {
+    gap: 6px;
   }
   .topbar-size {
     display: none;

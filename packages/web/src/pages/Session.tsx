@@ -88,9 +88,21 @@ export function Session({
   const [transport, setTransport] = useState<TransportKind | undefined>();
   const [controlHint, setControlHint] = useState(false);
   const hintTimerRef = useRef<number | undefined>(undefined);
+  // Sound is muted by default every session; a user tap unmutes (which also
+  // satisfies the browser's autoplay gesture). mutedRef gates the audio feed
+  // from inside the (memoized) event handlers.
+  const [muted, setMuted] = useState(true);
+  const mutedRef = useRef(true);
 
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    setMuted(next);
+    if (!next) void audioRef.current?.unlock();
   }, []);
 
   // View-mode tap on the video: flash a brief "take control" hint, then fade.
@@ -100,6 +112,11 @@ export function Session({
     hintTimerRef.current = window.setTimeout(() => setControlHint(false), 2000);
   }, []);
   useEffect(() => () => window.clearTimeout(hintTimerRef.current), []);
+  // Every device (re)opened starts muted — "default muted" applies per session.
+  useEffect(() => {
+    setMuted(true);
+    mutedRef.current = true;
+  }, [serial]);
 
   // Apply a quality choice optimistically (server confirms via qualityChanged).
   const applyQuality = useCallback(
@@ -327,7 +344,7 @@ export function Session({
         }
       },
       onAudioData(pts, data) {
-        audio.push(pts, data);
+        if (!mutedRef.current) audio.push(pts, data);
       },
     });
     clientRef.current = client;
@@ -404,80 +421,82 @@ export function Session({
         )}
         <div className="session-main">
           <div className="session-topbar">
-            <button onClick={onBack}>← 返回</button>
-            {multiDevice && (
-              <button className="topbar-arrow" title="上一台 (Alt+←)" onClick={() => switchBy(-1)}>
-                ‹
+            <div className="topbar-line">
+              <button className="topbar-back" onClick={onBack} title="返回" aria-label="返回">
+                <Icon name="back" />
               </button>
-            )}
-            <span style={{ fontWeight: 600 }}>{state.deviceName}</span>
-            {multiDevice && (
-              <button className="topbar-arrow" title="下一台 (Alt+→)" onClick={() => switchBy(1)}>
-                ›
-              </button>
-            )}
-            <span className="muted topbar-size" style={{ fontSize: 12 }}>
-              {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
-            </span>
-            {transport && (
-              <span
-                className={`transport-badge${transport === "webtransport" ? " wt" : ""}`}
-                title={transport === "webtransport" ? "WebTransport (HTTP/3 / QUIC)" : "WebSocket (TCP)"}
+              {multiDevice && (
+                <button className="topbar-arrow" title="上一台 (Alt+←)" onClick={() => switchBy(-1)}>
+                  ‹
+                </button>
+              )}
+              <span className="topbar-name">{state.deviceName}</span>
+              {multiDevice && (
+                <button className="topbar-arrow" title="下一台 (Alt+→)" onClick={() => switchBy(1)}>
+                  ›
+                </button>
+              )}
+              {transport && (
+                <span
+                  className={`transport-badge${transport === "webtransport" ? " wt" : ""}`}
+                  title={transport === "webtransport" ? "WebTransport (HTTP/3 / QUIC)" : "WebSocket (TCP)"}
+                >
+                  {transport === "webtransport" ? "WT" : "WS"}
+                </span>
+              )}
+              {state.status === "connecting" && <span className="muted" style={{ fontSize: 13 }}>連線中…</span>}
+              {state.status === "reconnecting" && <span style={{ color: "#f0a94b", fontSize: 13 }}>重新連線中…</span>}
+              {state.status === "gone" && <span className="error-text">裝置離線,等待重連…</span>}
+              {state.status === "kicked" && <span className="error-text">此連線已被中斷</span>}
+              {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
+              <span style={{ flex: 1 }} />
+              <button
+                className={`mode-btn ${controlling ? "controlling" : "viewing"}`}
+                title={controlling ? "你正在控制此裝置" : "目前為檢視模式 — 點擊取得控制權"}
+                onClick={() => {
+                  if (!controlling) send({ type: "takeControl" });
+                }}
               >
-                {transport === "webtransport" ? "WT" : "WS"}
-              </span>
-            )}
-        <QualityControl
-          auto={auto}
-          quality={quality}
-          codec={codec}
-          onApply={applyQuality}
-          onSetCodec={applyCodec}
-        />
-        <span style={{ flex: 1 }} />
-        <div className="topbar-tools">
-          <button
-            className={`mode-btn ${controlling ? "controlling" : "viewing"}`}
-            title={controlling ? "你正在控制此裝置" : "目前為檢視模式 — 點擊取得控制權"}
-            onClick={() => {
-              if (!controlling) send({ type: "takeControl" });
-            }}
-          >
-            {controlling ? "控制中" : "取得控制"}
-          </button>
-          <button
-            title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
-            onClick={() => send({ type: "setScreenOff", off: !screenOff })}
-            style={screenOff ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
-          >
-            <Icon name={screenOff ? "moon" : "brightness"} />
-          </button>
-          <button title="連線效能(位元率/RTT/壅塞)" onClick={() => setShowStats((v) => !v)}>
-            <Icon name="reception" />
-          </button>
-          <button
-            title={showDeviceStats ? "隱藏裝置狀態" : "顯示裝置狀態(電量/溫度/CPU/GPU/RAM)"}
-            onClick={() => setShowDeviceStats((v) => !v)}
-          >
-            <Icon name="motherboard" />
-          </button>
-          {audioState === "locked" && (
-            <button title="點擊開啟聲音" onClick={() => void audioRef.current?.unlock()}>
-              <Icon name="volumeMute" />
-            </button>
-          )}
-          {audioState === "unavailable" && (
-            <span className="muted topbar-tools-icon" title="此瀏覽器不支援音訊解碼(iOS 需 Safari 26+)">
-              <Icon name="volumeMute" />
-            </span>
-          )}
-        </div>
-        {state.status === "connecting" && <span className="muted">連線中…</span>}
-        {state.status === "reconnecting" && <span style={{ color: "#f0a94b", fontSize: 13 }}>重新連線中…</span>}
-        {state.status === "gone" && <span className="error-text">裝置離線,等待重連…</span>}
-        {state.status === "kicked" && <span className="error-text">此連線已被中斷</span>}
-        {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
-      </div>
+                {controlling ? "控制中" : "取得控制"}
+              </button>
+            </div>
+            <div className="topbar-line">
+              <QualityControl auto={auto} quality={quality} codec={codec} onApply={applyQuality} onSetCodec={applyCodec} />
+              <span style={{ flex: 1 }} />
+              <div className="topbar-tools">
+                <button
+                  className={`mute-btn${muted ? " muted" : ""}`}
+                  title={
+                    audioState === "unavailable"
+                      ? "此瀏覽器不支援音訊(iOS 需 Safari 26+)"
+                      : muted
+                        ? "聲音已靜音 — 點擊開啟"
+                        : "點擊靜音"
+                  }
+                  disabled={audioState === "unavailable"}
+                  onClick={toggleMute}
+                >
+                  <Icon name={muted ? "volumeMute" : "volumeUp"} />
+                </button>
+                <button
+                  title={screenOff ? "手機螢幕已關閉(點擊點亮)" : "關閉手機實體螢幕以降溫"}
+                  onClick={() => send({ type: "setScreenOff", off: !screenOff })}
+                  style={screenOff ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                >
+                  <Icon name={screenOff ? "moon" : "brightness"} />
+                </button>
+                <button title="連線效能(位元率/RTT/壅塞)" onClick={() => setShowStats((v) => !v)}>
+                  <Icon name="reception" />
+                </button>
+                <button
+                  title={showDeviceStats ? "隱藏裝置狀態" : "顯示裝置狀態(電量/溫度/CPU/GPU/RAM)"}
+                  onClick={() => setShowDeviceStats((v) => !v)}
+                >
+                  <Icon name="motherboard" />
+                </button>
+              </div>
+            </div>
+          </div>
       <div ref={containerRef} className="session-stage">
         {deviceStats && (
           <div className="device-stats-overlay">
@@ -614,8 +633,9 @@ function QualityControl({
 
   return (
     <div className="quality-pop" ref={wrapRef}>
-      <button className="quality-select" title="畫質設定" onClick={() => setOpen((v) => !v)}>
-        {auto ? "🅰︎ 自動" : "✋ 手動"} · {qualityLabel(quality)}
+      <button className="quality-select" title={`畫質設定 · ${qualityLabel(quality)}`} onClick={() => setOpen((v) => !v)}>
+        {auto ? "自動" : "手動"} ·{" "}
+        {RESOLUTION_OPTIONS.find((r) => r.value === quality.maxSize)?.label ?? `${quality.maxSize}px`} · {quality.maxFps}fps
       </button>
       {open && (
         <div className="quality-panel">
