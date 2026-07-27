@@ -1,16 +1,4 @@
-import {
-  Channel,
-  chunkVideoFrame,
-  decodeFrame,
-  encodeAudioDataFrame,
-  encodeJsonFrame,
-  encodeMetaFrame,
-  encodeVideoConfFrame,
-  type AudioMeta,
-  type ClientMessage,
-  type ServerMessage,
-  type VideoMeta,
-} from "@speedcrcpy/shared";
+import type { AudioMeta, ClientMessage, ServerMessage, VideoMeta } from "@speedcrcpy/shared";
 import {
   AndroidKeyCode,
   AndroidKeyEventAction,
@@ -19,10 +7,9 @@ import {
   type AndroidKeyEventMeta,
   type ScrcpyMediaStreamPacket,
 } from "@yume-chan/scrcpy";
-import type { WebSocket } from "ws";
 import type { ManagedSession, SessionViewer } from "../scrcpy/session-manager.js";
 import { ViewerCongestion } from "./congestion.js";
-import { SendQueue } from "./send-queue.js";
+import type { ViewerSink } from "./sink.js";
 
 const NAVIGATE_KEYCODES: Record<string, AndroidKeyCode> = {
   home: AndroidKeyCode.AndroidHome,
@@ -44,20 +31,17 @@ const TOUCH_ACTIONS = {
  * media packets, and routes incoming control messages.
  */
 export class Viewer implements SessionViewer {
-  private readonly queue: SendQueue;
   private readonly congestion: ViewerCongestion;
   private readonly unsubscribes: (() => void)[] = [];
-  private frameId = 0;
   private sentAudioMeta = false;
   private videoGated = false;
   private closed = false;
 
   constructor(
-    private readonly ws: WebSocket,
+    private readonly sink: ViewerSink,
     private readonly session: ManagedSession,
   ) {
-    this.queue = new SendQueue(ws);
-    this.congestion = new ViewerCongestion(this.queue, {
+    this.congestion = new ViewerCongestion(this.sink, {
       sendPing: (pingId, sentAt) => this.sendJson({ type: "ping", pingId, sentAt }),
       setGate: (gated) => {
         this.videoGated = gated;
@@ -68,7 +52,7 @@ export class Viewer implements SessionViewer {
           type: "stats",
           encodeBitrate: this.session.quality.videoBitRate,
           sendBitrate: Math.round(stats.sendBitrate),
-          droppedFrames: this.queue.droppedFrames,
+          droppedFrames: this.sink.droppedFrames,
           mode: stats.mode,
           quality: this.session.quality,
           rttMs: Math.round(stats.rttMs),
@@ -77,17 +61,8 @@ export class Viewer implements SessionViewer {
         }),
     });
 
-    ws.on("message", (data: Buffer, isBinary: boolean) => {
-      if (!isBinary) return;
-      try {
-        const frame = decodeFrame(new Uint8Array(data));
-        if (frame.channel === Channel.JSON) this.handleMessage(frame.message as ClientMessage);
-      } catch (error) {
-        console.warn(`[viewer] bad frame from client: ${(error as Error).message}`);
-      }
-    });
-    ws.on("close", () => this.detach());
-    ws.on("error", () => this.detach());
+    this.sink.onMessage((message) => this.handleMessage(message));
+    this.sink.onClose(() => this.detach());
   }
 
   attach(): void {
@@ -120,7 +95,7 @@ export class Viewer implements SessionViewer {
 
   notifyDeviceGone(): void {
     this.sendJson({ type: "deviceGone" });
-    this.ws.close();
+    this.sink.close();
   }
 
   notifyControlChanged(controlling: boolean): void {
@@ -133,7 +108,7 @@ export class Viewer implements SessionViewer {
 
   /** Quality switch completed: restart the client decoder on the new stream. */
   notifyVideoRestarted(byAuto: boolean): void {
-    this.queue.clearVideo();
+    this.sink.clearVideo();
     this.sendJson({
       type: "qualityChanged",
       auto: this.session.autoAdapt,
@@ -160,7 +135,7 @@ export class Viewer implements SessionViewer {
     this.closed = true;
     this.congestion.dispose();
     for (const unsubscribe of this.unsubscribes) unsubscribe();
-    this.queue.close();
+    this.sink.close();
     this.session.detach(this);
   }
 
@@ -168,7 +143,7 @@ export class Viewer implements SessionViewer {
   private sendVideoStart(): void {
     this.sendVideoMeta();
     const config = this.session.video.currentConfig;
-    if (config) this.queue.enqueueControl(encodeVideoConfFrame(config));
+    if (config) this.sink.sendVideoConf(config);
   }
 
   private sendVideoMeta(): void {
@@ -179,17 +154,20 @@ export class Viewer implements SessionViewer {
       height: video.height,
       quality: this.session.quality,
     };
-    this.queue.enqueueControl(encodeMetaFrame(Channel.VIDEO_META, meta));
+    this.sink.sendVideoMeta(meta);
   }
 
   private onVideoPacket(packet: ScrcpyMediaStreamPacket): void {
     if (packet.type === "configuration") {
-      this.queue.enqueueControl(encodeVideoConfFrame(packet.data));
+      this.sink.sendVideoConf(packet.data);
       return;
     }
     if (this.videoGated) return;
-    const chunks = chunkVideoFrame(this.frameId++, packet.keyframe ?? false, packet.pts ?? 0n, packet.data);
-    this.queue.enqueueVideoFrame(chunks);
+    this.sink.sendVideoFrame({
+      keyframe: packet.keyframe ?? false,
+      pts: packet.pts ?? 0n,
+      data: packet.data,
+    });
   }
 
   private onAudioPacket(packet: ScrcpyMediaStreamPacket): void {
@@ -197,14 +175,14 @@ export class Viewer implements SessionViewer {
     if (!this.sentAudioMeta) {
       const meta: AudioMeta | undefined = this.session.device.audioMeta;
       if (!meta) return;
-      this.queue.enqueueControl(encodeMetaFrame(Channel.AUDIO_META, meta));
+      this.sink.sendAudioMeta(meta);
       this.sentAudioMeta = true;
     }
-    this.queue.enqueueAudio(encodeAudioDataFrame(packet.pts ?? 0n, packet.data));
+    this.sink.sendAudioData(packet.pts ?? 0n, packet.data);
   }
 
   private sendJson(message: ServerMessage): void {
-    this.queue.enqueueControl(encodeJsonFrame(message));
+    this.sink.sendControl(message);
   }
 
   private handleMessage(message: ClientMessage): void {

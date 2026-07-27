@@ -1,6 +1,7 @@
 import { encodeJsonFrame } from "@speedcrcpy/shared";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import { Viewer } from "../transport/viewer.js";
+import { WsSink } from "../transport/ws-sink.js";
 import type { WsGateway } from "./ws.js";
 
 export function registerSessionEndpoint(gateway: WsGateway, sessionManager: SessionManager): void {
@@ -15,7 +16,7 @@ export function registerSessionEndpoint(gateway: WsGateway, sessionManager: Sess
       .acquire(serial)
       .then((session) => {
         if (ws.readyState !== ws.OPEN) return;
-        new Viewer(ws, session).attach();
+        new Viewer(new WsSink(ws), session).attach();
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "session failed";

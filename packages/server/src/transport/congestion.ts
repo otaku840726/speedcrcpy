@@ -1,6 +1,6 @@
 import { QUALITY_LADDER } from "@speedcrcpy/shared";
 import type { ManagedSession } from "../scrcpy/session-manager.js";
-import type { SendQueue } from "./send-queue.js";
+import type { ViewerSink } from "./sink.js";
 
 const SAMPLE_MS = 100;
 const PING_MS = 1_000;
@@ -72,7 +72,7 @@ export class ViewerCongestion {
   private readonly fastTriggers: number[] = [];
 
   constructor(
-    private readonly queue: SendQueue,
+    private readonly sink: ViewerSink,
     private readonly hooks: ViewerCongestionHooks,
   ) {
     this.sampleTimer = setInterval(() => this.sample(), SAMPLE_MS);
@@ -119,7 +119,7 @@ export class ViewerCongestion {
   /** True only when data is actually piling up in the socket — the
    * precondition for any throughput-based conclusion. */
   get isBacklogged(): boolean {
-    return this.queue.bufferedBytes > BACKPRESSURE_BYTES || this.level === "stalled";
+    return this.sink.bufferedBytes > BACKPRESSURE_BYTES || this.level === "stalled";
   }
 
   get isHealthy(): boolean {
@@ -153,10 +153,10 @@ export class ViewerCongestion {
 
   private sample(): void {
     const now = Date.now();
-    const buffered = this.queue.bufferedBytes;
+    const buffered = this.sink.bufferedBytes;
 
     // Send-rate EWMA from per-send accounting (finer than bufferedAmount).
-    const sent = this.queue.sentBytes;
+    const sent = this.sink.sentBytes;
     const instantRate = ((sent - this.lastSentBytes) * 8 * 1000) / SAMPLE_MS;
     this.lastSentBytes = sent;
     this.sendBitrate = this.sendBitrate * 0.9 + instantRate * 0.1;
@@ -188,7 +188,7 @@ export class ViewerCongestion {
     if (this.mode === "gate") {
       if (!this.gated && level !== "ok") {
         this.gated = true;
-        this.queue.clearVideo();
+        this.sink.clearVideo();
         this.hooks.setGate(true);
       } else if (this.gated && buffered < DRAINED_BYTES) {
         this.gated = false;
@@ -198,7 +198,7 @@ export class ViewerCongestion {
     } else if (level === "stalled") {
       // Even in decode-through, a stalled socket means queued frames are pure
       // latency — drop them all and resync once drained.
-      this.queue.clearVideo();
+      this.sink.clearVideo();
       this.hooks.requestKeyframe();
     }
   }

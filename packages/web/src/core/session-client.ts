@@ -31,13 +31,27 @@ const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 10_000;
 
 /**
- * Session WebSocket wrapper: demultiplexes channels, reassembles chunked
+ * Pluggable session connection. The UI speaks to a `SessionClient` facade,
+ * which delegates to one of these — `WsTransport` today, a WebTransport
+ * implementation later — behind the exact same surface. All channel demux and
+ * frame reassembly live inside the concrete transport, so swapping wires never
+ * touches the UI.
+ */
+export interface SessionTransport {
+  send(message: ClientMessage): void;
+  close(): void;
+}
+
+export type SessionTransportFactory = (serial: string, events: SessionClientEvents) => SessionTransport;
+
+/**
+ * WebSocket session transport: demultiplexes channels, reassembles chunked
  * video frames, and reconnects automatically. Mobile browsers kill the
  * socket within seconds of backgrounding the tab — on return to the
  * foreground we reconnect immediately; in the foreground we retry with
  * exponential backoff forever (the device may come back at any time).
  */
-export class SessionClient {
+export class WsTransport implements SessionTransport {
   private ws: WebSocket | undefined;
   private closedByUser = false;
   private retryDelay = RETRY_BASE_MS;
@@ -171,5 +185,30 @@ export class SessionClient {
         break;
       }
     }
+  }
+}
+
+/**
+ * Session facade the UI talks to. Owns a pluggable `SessionTransport` (defaults
+ * to `WsTransport`); the WebTransport migration injects a different factory
+ * here and nothing above this line changes.
+ */
+export class SessionClient {
+  private readonly transport: SessionTransport;
+
+  constructor(
+    serial: string,
+    events: SessionClientEvents,
+    makeTransport: SessionTransportFactory = (s, e) => new WsTransport(s, e),
+  ) {
+    this.transport = makeTransport(serial, events);
+  }
+
+  send(message: ClientMessage): void {
+    this.transport.send(message);
+  }
+
+  close(): void {
+    this.transport.close();
   }
 }
