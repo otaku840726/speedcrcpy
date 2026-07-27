@@ -11,7 +11,7 @@ import {
   type ServerMessage,
   type VideoMeta,
 } from "@speedcrcpy/shared";
-import type { SessionClientEvents, SessionTransport } from "./session-client";
+import type { SessionClientEvents, SessionTransport, VideoFrameData } from "./session-client";
 
 export interface WtInfo {
   enabled: boolean;
@@ -22,6 +22,13 @@ export interface WtInfo {
 
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 10_000;
+/**
+ * Video frames each ride their own QUIC stream and can arrive out of order.
+ * Hold up to this many while waiting to fill a gap before skipping the missing
+ * frame(s) — bounds added latency (~8 frames ≈ 130 ms at 60 fps) while giving
+ * the decoder frames in monotonic order (out-of-order feeds make it error).
+ */
+const VIDEO_REORDER_WINDOW = 8;
 
 function base64ToBytes(b64: string): Uint8Array {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
@@ -44,6 +51,12 @@ export class WtTransport implements SessionTransport {
   private everConnected = false;
   private retryDelay = RETRY_BASE_MS;
   private retryTimer: number | undefined;
+
+  // Frame reorder buffer: per-frame streams arrive out of order, but the
+  // decoder needs decode (frameId) order. The server's frame ids start at 0
+  // per connection, so videoNextId starts at 0 (reset on reconnect).
+  private videoNextId = 0;
+  private readonly videoReorder = new Map<number, VideoFrameData>();
 
   constructor(
     private readonly serial: string,
@@ -73,6 +86,9 @@ export class WtTransport implements SessionTransport {
 
   private async connect(): Promise<void> {
     this.controlWriter = undefined;
+    // A reconnect is a fresh server sink whose frame ids restart at 0.
+    this.videoNextId = 0;
+    this.videoReorder.clear();
     const url = `https://${location.hostname}:${this.info.port}/wt/session`;
     const options: WebTransportOptions = this.info.certHash
       ? { serverCertificateHashes: [{ algorithm: "sha-256", value: base64ToBytes(this.info.certHash) as BufferSource }] }
@@ -205,7 +221,32 @@ export class WtTransport implements SessionTransport {
         offset += part.byteLength;
       }
       const frame = decodeWtVideoBody(body);
-      this.events.onVideoFrame({ keyframe: frame.keyframe, pts: frame.pts, data: frame.data });
+      this.emitVideoFrame(frame.frameId, { keyframe: frame.keyframe, pts: frame.pts, data: frame.data });
+    }
+  }
+
+  /** Buffer a completed frame by id, then emit whatever is now in order. */
+  private emitVideoFrame(frameId: number, frame: VideoFrameData): void {
+    if (frameId < this.videoNextId) return; // already emitted past it — stale
+    this.videoReorder.set(frameId, frame);
+    this.drainVideo();
+  }
+
+  private drainVideo(): void {
+    for (;;) {
+      // Emit the contiguous run starting at the next expected id.
+      for (let f = this.videoReorder.get(this.videoNextId); f; f = this.videoReorder.get(this.videoNextId)) {
+        this.videoReorder.delete(this.videoNextId);
+        this.videoNextId++;
+        this.events.onVideoFrame(f);
+      }
+      // A gap that isn't filling: skip the missing frame(s) and resync to the
+      // oldest buffered frame (decode-through mosaic heals via intra-refresh).
+      if (this.videoReorder.size <= VIDEO_REORDER_WINDOW) break;
+      let smallest = Infinity;
+      for (const id of this.videoReorder.keys()) if (id < smallest) smallest = id;
+      if (smallest === Infinity || smallest <= this.videoNextId) break;
+      this.videoNextId = smallest;
     }
   }
 

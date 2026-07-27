@@ -44,8 +44,16 @@ export interface WtSession {
 
 /** Audio outranks every video frame; control rides the client-opened bidi. */
 const AUDIO_SEND_ORDER = 1e15;
-/** Cap concurrent in-flight video streams; abort the oldest beyond this. */
-const MAX_ACTIVE_VIDEO = 3;
+/**
+ * Runaway guard on concurrent in-flight video streams (abort the oldest
+ * beyond it). Deliberately generous: on a healthy high-RTT link there are
+ * legitimately RTT×fps frames in flight (the bandwidth-delay product — e.g.
+ * ~23 frames at 60 fps over a 380 ms path), so a tight cap would drop frames
+ * purely for latency, not congestion. Real congestion is handled by the
+ * congestion controller (delay gradient + outstanding bytes) and the client's
+ * reorder/skip buffer; this only bounds pathological backlog.
+ */
+const MAX_ACTIVE_VIDEO = 64;
 
 interface VideoEntry {
   id: number;
@@ -69,6 +77,11 @@ export class WtSink implements ViewerSink {
   droppedFrames = 0;
   sentBytes = 0;
 
+  /** Bytes handed to a writer whose write() has not resolved yet. QUIC flow
+   * control blocks write() when the send window is full, so this tracks real
+   * backpressure (unlike a raw count of in-flight frames, which just mirrors
+   * the bandwidth-delay product and would read as false congestion). */
+  private outstandingBytes = 0;
   private readonly controlWriter: WtWriter;
   private audioStreamPromise: Promise<WtWriter> | undefined;
   private videoFrameId = 0;
@@ -120,14 +133,16 @@ export class WtSink implements ViewerSink {
     this.activeVideo.push(entry);
     this.capActiveVideo();
 
+    // sendOrder: OLDER frames rank higher (larger sendOrder), so QUIC transmits
+    // frames roughly in capture order — a decoder needs decode order, and the
+    // client only lightly reorders. Kept below AUDIO_SEND_ORDER.
     void this.session
-      .createUnidirectionalStream({ sendOrder: id })
+      .createUnidirectionalStream({ sendOrder: -id })
       .then(async (stream) => {
         if (entry.settled) return; // capped/cleared before the stream opened
         const writer = stream.getWriter();
         entry.writer = writer;
-        await writer.write(bytes);
-        this.sentBytes += bytes.byteLength;
+        await this.accountedWrite(writer, bytes);
         await writer.close();
         this.settle(entry, false);
       })
@@ -156,11 +171,9 @@ export class WtSink implements ViewerSink {
 
   // ---- backpressure / stats ----
 
-  /** Best-effort local backlog: bytes of video frames still in flight. */
+  /** Local backpressure: bytes stuck in a blocked writer (QUIC flow control). */
   get bufferedBytes(): number {
-    let total = 0;
-    for (const entry of this.activeVideo) if (!entry.settled) total += entry.bytes;
-    return total;
+    return this.outstandingBytes;
   }
 
   // ---- inbound / lifecycle ----
@@ -177,15 +190,20 @@ export class WtSink implements ViewerSink {
 
   // ---- internals ----
 
+  /** Write with outstanding-byte accounting for the backpressure signal. */
+  private async accountedWrite(writer: WtWriter, wire: Uint8Array): Promise<void> {
+    this.outstandingBytes += wire.byteLength;
+    try {
+      await writer.write(wire);
+      this.sentBytes += wire.byteLength;
+    } finally {
+      this.outstandingBytes -= wire.byteLength;
+    }
+  }
+
   private writeControl(frame: Uint8Array): void {
     if (this.closed) return;
-    const wire = encodeStreamFrame(frame);
-    void this.controlWriter.write(wire).then(
-      () => {
-        this.sentBytes += wire.byteLength;
-      },
-      () => {},
-    );
+    void this.accountedWrite(this.controlWriter, encodeStreamFrame(frame)).catch(() => {});
   }
 
   private writeAudio(frame: Uint8Array): void {
@@ -200,13 +218,7 @@ export class WtSink implements ViewerSink {
         },
       );
     }
-    void this.audioStreamPromise.then(
-      async (writer) => {
-        await writer.write(wire);
-        this.sentBytes += wire.byteLength;
-      },
-      () => {},
-    );
+    void this.audioStreamPromise.then((writer) => this.accountedWrite(writer, wire)).catch(() => {});
   }
 
   private capActiveVideo(): void {
