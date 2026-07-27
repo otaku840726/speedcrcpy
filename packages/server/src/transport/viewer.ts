@@ -146,8 +146,13 @@ export class Viewer implements SessionViewer {
 
   /** Admin eviction: tell the client to stop reconnecting, then drop it. */
   kick(): void {
+    if (this.closed) return;
     this.sendJson({ type: "kicked" });
-    this.sink.close();
+    // Let the "kicked" frame flush before dropping the transport. WT closes the
+    // QUIC session abruptly, so an immediate close loses the frame and the
+    // client just sees a disconnect and reconnects. The up-to-date client
+    // closes itself on "kicked" (no reconnect); this close is the backstop.
+    setTimeout(() => this.sink.close(), 400);
   }
 
   private detach(): void {
