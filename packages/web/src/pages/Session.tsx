@@ -6,12 +6,14 @@ import {
   RESOLUTION_OPTIONS,
   sameQuality,
   type ClientMessage,
+  type DisplayInfo,
   type QualitySettings,
   type ServerMessage,
   type VideoCodec,
   type VideoMeta,
 } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { api } from "../api";
 import { AudioPipeline, type AudioState } from "../core/audio-pipeline";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { useDeviceList } from "../core/events-socket";
@@ -461,7 +463,7 @@ export function Session({
               </button>
             </div>
             <div className="topbar-line">
-              <QualityControl auto={auto} quality={quality} codec={codec} onApply={applyQuality} onSetCodec={applyCodec} />
+              <QualityControl serial={serial} auto={auto} quality={quality} codec={codec} onApply={applyQuality} onSetCodec={applyCodec} />
               <span style={{ flex: 1 }} />
               <div className="topbar-tools">
                 <button
@@ -587,12 +589,14 @@ export function Session({
  * them — and editing any one drops into manual mode.
  */
 function QualityControl({
+  serial,
   auto,
   quality,
   codec,
   onApply,
   onSetCodec,
 }: {
+  serial: string;
   auto: boolean;
   quality: QualitySettings;
   codec: VideoCodec;
@@ -694,8 +698,120 @@ function QualityControl({
               ))}
             </select>
           </label>
+          <DisplaySection serial={serial} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** Per-device screen-resolution override (wm size / wm density). Reshapes an
+ * unusually tall phone so the mirror has smaller letterbox bars. */
+function DisplaySection({ serial }: { serial: string }) {
+  const [info, setInfo] = useState<DisplayInfo>();
+  const [draft, setDraft] = useState<{ width: number; height: number; density: number }>();
+  const [custom, setCustom] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    api<DisplayInfo>(`/api/devices/${encodeURIComponent(serial)}/display`)
+      .then((d) => {
+        setInfo(d);
+        setDraft(d.override ?? { width: d.nativeWidth, height: d.nativeHeight, density: d.nativeDensity });
+        setCustom(false);
+      })
+      .catch(() => {});
+  }, [serial]);
+  useEffect(load, [load]);
+
+  if (!info || !draft) return null;
+
+  const { nativeWidth: nw, nativeHeight: nh, nativeDensity: nd } = info;
+  const nativeRatio = (nh / nw) * 9;
+  const presets = [nativeRatio, 19.5, 18, 16].filter((r, i, a) => r <= nativeRatio + 0.01 && a.indexOf(r) === i);
+  const isNativeDraft = draft.width === nw && draft.height === nh && draft.density === nd;
+
+  const apply = async (body: object) => {
+    setBusy(true);
+    try {
+      await api(`/api/devices/${encodeURIComponent(serial)}/display`, { method: "POST", body: JSON.stringify(body) });
+      load();
+    } catch {
+      /* leave draft as-is */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="quality-display">
+      <div className="qd-head">
+        <span>裝置解析度</span>
+        <span className="qd-warn">改實機</span>
+      </div>
+      <div className="qd-native">
+        原生 {nw}×{nh} · {nd}dpi
+      </div>
+      <div className="qd-seg">
+        {presets.map((r) => {
+          const isNativeChip = Math.abs(r - nativeRatio) < 0.01;
+          const h = Math.round((nw * r) / 9);
+          const on = !custom && draft.width === nw && (isNativeChip ? isNativeDraft : draft.height === h);
+          return (
+            <button
+              key={r}
+              className={`qd-chip${on ? " on" : ""}`}
+              onClick={() => {
+                setCustom(false);
+                setDraft({ width: nw, height: isNativeChip ? nh : h, density: nd });
+              }}
+            >
+              {isNativeChip ? `原生 ${r}:9` : `${r}:9`}
+            </button>
+          );
+        })}
+        <button className={`qd-chip${custom ? " on" : ""}`} onClick={() => setCustom(true)}>
+          自訂
+        </button>
+      </div>
+      {custom && (
+        <div className="qd-fields">
+          <label>
+            長(高)
+            <input value={draft.height} onChange={(e) => setDraft({ ...draft, height: Number(e.target.value) || 0 })} />
+          </label>
+          <label>
+            寬
+            <input
+              value={draft.width}
+              onChange={(e) => {
+                const w = Number(e.target.value) || 0;
+                setDraft({ ...draft, width: w, density: w > 0 ? Math.round((nd * w) / nw) : draft.density });
+              }}
+            />
+          </label>
+          <label>
+            密度
+            <input value={draft.density} onChange={(e) => setDraft({ ...draft, density: Number(e.target.value) || 0 })} />
+          </label>
+        </div>
+      )}
+      <div className="qd-res">
+        套用後 →{" "}
+        <b>
+          {draft.width}×{draft.height}
+        </b>{" "}
+        · {draft.density}dpi
+      </div>
+      <div className="qd-acts">
+        <button className="primary" disabled={busy} onClick={() => void apply(draft)}>
+          套用
+        </button>
+        <button disabled={busy || !info.override} onClick={() => void apply({ reset: true })}>
+          還原原生
+        </button>
+      </div>
+      <div className="qd-foot">改的是手機實體螢幕,所有觀看者與旁邊真人都會看到;按「還原原生」才復原。</div>
     </div>
   );
 }

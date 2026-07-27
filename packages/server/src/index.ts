@@ -6,6 +6,7 @@ import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
 import { WtGateway } from "./http/wt-gateway.js";
 import { DeviceStatsManager } from "./scrcpy/device-stats.js";
+import { DisplayManager } from "./scrcpy/display-override.js";
 import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
@@ -31,14 +32,16 @@ const adbManager = new AdbManager(config);
 const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
 const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterval * 1000);
 const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1000);
+const displayManager = new DisplayManager(adbManager, config.dataDir);
 const sessionManager = new SessionManager(
   adbManager,
   config.screenOffDefault,
   config.sessionLinger * 1000,
   config.videoCodec,
   (serial, active) => screenManager.setSessionActive(serial, active),
+  displayManager,
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);

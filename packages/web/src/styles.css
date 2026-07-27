@@ -622,7 +622,7 @@ input:focus {
   top: calc(100% + 6px);
   left: 0;
   z-index: 40;
-  min-width: 190px;
+  min-width: 232px;
   background: var(--panel);
   border: 1px solid var(--accent);
   border-radius: 10px;
@@ -640,6 +640,90 @@ input:focus {
   gap: 12px;
   font-size: 13px;
   color: var(--text);
+}
+
+/* Per-device resolution override section inside the quality panel */
+.quality-display {
+  border-top: 1px solid var(--border, #2f353d);
+  padding-top: 10px;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qd-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.qd-warn {
+  font-size: 10px;
+  font-weight: 500;
+  color: #f0a94b;
+  border: 0.5px solid #f0a94b;
+  border-radius: 6px;
+  padding: 0 5px;
+}
+.qd-native {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.qd-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.qd-chip {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.qd-chip.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.qd-fields {
+  display: flex;
+  gap: 8px;
+}
+.qd-fields label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.qd-fields input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.qd-res {
+  font-size: 12px;
+}
+.qd-res b {
+  color: var(--accent);
+  font-weight: 500;
+}
+.qd-acts {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.qd-acts button {
+  font-size: 12px;
+  padding: 5px 12px;
+}
+.qd-acts button.primary {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.qd-foot {
+  font-size: 10px;
+  color: #f0a94b;
+  line-height: 1.5;
 }
 
 .quality-row select {

@@ -108,6 +108,16 @@ export interface SessionConnections {
   viewers: ViewerConnection[];
 }
 
+// ---- display override (REST: /api/devices/:serial/display) ----
+
+/** Device native display size/density and any active `wm size`/`density` override. */
+export interface DisplayInfo {
+  nativeWidth: number;
+  nativeHeight: number;
+  nativeDensity: number;
+  override: { width: number; height: number; density: number } | null;
+}
+
 // ---- device events websocket (/ws/events) ----
 
 export interface DeviceInfo {

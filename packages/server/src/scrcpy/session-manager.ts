@@ -13,6 +13,7 @@ import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { SessionCongestion } from "../transport/congestion.js";
 import { DeviceSession } from "./device-session.js";
+import type { DisplayManager } from "./display-override.js";
 import { VideoPipeline } from "./video-pipeline.js";
 
 const RESET_VIDEO_DEBOUNCE_MS = 1_000;
@@ -344,6 +345,8 @@ export class SessionManager {
     private readonly videoCodec: VideoCodec = "h264",
     /** Notified when a device is taken by / released from a viewer session. */
     private readonly onSessionActive?: (serial: string, active: boolean) => void,
+    /** Re-applies any persisted display-resolution override before capture starts. */
+    private readonly displayManager?: DisplayManager,
   ) {}
 
   /** Start (or join) the session for a device. Callers must attach a viewer. */
@@ -396,6 +399,17 @@ export class SessionManager {
     }
   }
 
+  /** Nudge an active session to re-read the display after a resolution change. */
+  async pokeVideo(serial: string): Promise<void> {
+    const pending = this.sessions.get(serial);
+    if (!pending) return;
+    try {
+      await (await pending).requestResetVideo();
+    } catch {
+      /* session tearing down */
+    }
+  }
+
   async closeAll(): Promise<void> {
     const pending = [...this.sessions.values()];
     this.sessions.clear();
@@ -420,6 +434,13 @@ export class SessionManager {
         : stored.quality
       : QUALITY_LADDER[DEFAULT_LADDER_INDEX]!;
     const codec = stored?.codec ?? this.videoCodec;
+
+    // Re-apply any persisted resolution override before capture starts (a device
+    // reboot clears wm overrides), so scrcpy captures at the chosen size.
+    await this.displayManager?.reapplyStored(serial).catch((error: unknown) => {
+      console.warn(`[display] reapply failed for ${serial}: ${error instanceof Error ? error.message : error}`);
+    });
+
     const video = await VideoPipeline.start(adb, { quality, codec, intraRefresh: true }, serial);
 
     const onGone = () => void this.teardown(serial, "exited");
