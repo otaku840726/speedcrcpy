@@ -17,7 +17,7 @@ import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { useDeviceList } from "../core/events-socket";
 import { Icon } from "../core/icons";
 import { attachInput } from "../core/input";
-import { SessionClient } from "../core/session-client";
+import { SessionClient, type TransportKind } from "../core/session-client";
 import { VideoPipeline } from "../core/video-pipeline";
 import { DeviceRail } from "./DeviceRail";
 
@@ -85,6 +85,7 @@ export function Session({
   const [showStats, setShowStats] = useState(false);
   const [controlling, setControlling] = useState(true);
   const [screenOff, setScreenOff] = useState(false);
+  const [transport, setTransport] = useState<TransportKind | undefined>();
 
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
@@ -266,6 +267,9 @@ export function Session({
       onDisconnected() {
         setState((s) => ({ ...s, status: "reconnecting" }));
       },
+      onTransport(kind: TransportKind) {
+        setTransport(kind);
+      },
       onVideoMeta(meta: VideoMeta) {
         // Restarting the decoder blanks the picture for a moment — only do
         // it when the stream generation actually changed (codec, quality
@@ -400,6 +404,14 @@ export function Session({
             <span className="muted topbar-size" style={{ fontSize: 12 }}>
               {videoSize ? `${videoSize.width}×${videoSize.height}` : ""}
             </span>
+            {transport && (
+              <span
+                className={`transport-badge${transport === "webtransport" ? " wt" : ""}`}
+                title={transport === "webtransport" ? "WebTransport (HTTP/3 / QUIC)" : "WebSocket (TCP)"}
+              >
+                {transport === "webtransport" ? "WT" : "WS"}
+              </span>
+            )}
         <QualityControl
           auto={auto}
           quality={quality}

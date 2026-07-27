@@ -91,6 +91,24 @@ input:focus {
   font-size: 13px;
 }
 
+/* Active session transport (WS = TCP fallback, WT = WebTransport/QUIC). */
+.transport-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid currentColor;
+  color: var(--text-dim);
+  opacity: 0.8;
+  line-height: 1.5;
+  flex: none;
+}
+.transport-badge.wt {
+  color: var(--accent);
+  opacity: 1;
+}
+
 .device-card {
   background: var(--panel);
   border: 1px solid var(--border);

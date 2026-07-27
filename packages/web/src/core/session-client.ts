@@ -15,6 +15,8 @@ export interface VideoFrameData {
   data: Uint8Array;
 }
 
+export type TransportKind = "webtransport" | "websocket";
+
 export interface SessionClientEvents {
   onServerMessage(message: ServerMessage): void;
   onVideoMeta(meta: VideoMeta): void;
@@ -26,6 +28,8 @@ export interface SessionClientEvents {
   onConnected(): void;
   /** Connection lost; automatic reconnection is already scheduled. */
   onDisconnected(): void;
+  /** Which transport is now connected — fires on connect and on WT→WS fallback. */
+  onTransport?(kind: TransportKind): void;
 }
 
 const RETRY_BASE_MS = 1_000;
@@ -189,6 +193,17 @@ export class WsTransport implements SessionTransport {
   }
 }
 
+/** Wrap events so each successful (re)connect reports which transport connected. */
+function tagged(events: SessionClientEvents, kind: TransportKind): SessionClientEvents {
+  return {
+    ...events,
+    onConnected: () => {
+      events.onTransport?.(kind);
+      events.onConnected();
+    },
+  };
+}
+
 async function fetchWtInfo(): Promise<WtInfo | null> {
   try {
     const res = await fetch("/api/wt-info", { credentials: "same-origin" });
@@ -234,17 +249,17 @@ export class SessionClient {
     if (this.closed) return;
     if (info?.enabled && typeof WebTransport !== "undefined") {
       console.info("[session] transport: WebTransport");
-      const wt = new WtTransport(serial, events, info, () => {
+      const wt = new WtTransport(serial, tagged(events, "webtransport"), info, () => {
         // First WT connect failed — drop to WebSocket, once.
         if (this.closed || this.transport !== wt) return;
         console.info("[session] WebTransport connect failed, falling back to WebSocket");
-        this.transport = new WsTransport(serial, events);
+        this.transport = new WsTransport(serial, tagged(events, "websocket"));
         this.flush();
       });
       this.transport = wt;
     } else {
       console.info("[session] transport: WebSocket");
-      this.transport = new WsTransport(serial, events);
+      this.transport = new WsTransport(serial, tagged(events, "websocket"));
     }
     this.flush();
   }
