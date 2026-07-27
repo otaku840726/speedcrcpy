@@ -24,7 +24,7 @@ import { DeviceRail } from "./DeviceRail";
 const isWideScreen = () => (typeof window !== "undefined" ? window.innerWidth >= 700 : true);
 
 interface SessionState {
-  status: "connecting" | "streaming" | "reconnecting" | "gone" | "error";
+  status: "connecting" | "streaming" | "reconnecting" | "gone" | "error" | "kicked";
   deviceName: string;
   detail?: string;
 }
@@ -253,6 +253,11 @@ export function Session({
           case "deviceGone":
             setState((s) => ({ ...s, status: "gone" }));
             break;
+          case "kicked":
+            // Server evicted us — stop reconnecting and say so.
+            setState((s) => ({ ...s, status: "kicked" }));
+            client.close();
+            break;
           case "error":
             setState((s) => ({ ...s, status: "error", detail: message.message }));
             break;
@@ -451,6 +456,7 @@ export function Session({
         {state.status === "connecting" && <span className="muted">連線中…</span>}
         {state.status === "reconnecting" && <span style={{ color: "#f0a94b", fontSize: 13 }}>重新連線中…</span>}
         {state.status === "gone" && <span className="error-text">裝置離線,等待重連…</span>}
+        {state.status === "kicked" && <span className="error-text">此連線已被中斷</span>}
         {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
       </div>
       <div ref={containerRef} className="session-stage">

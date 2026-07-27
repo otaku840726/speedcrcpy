@@ -38,7 +38,7 @@ const sessionManager = new SessionManager(
   config.videoCodec,
   (serial, active) => screenManager.setSessionActive(serial, active),
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);

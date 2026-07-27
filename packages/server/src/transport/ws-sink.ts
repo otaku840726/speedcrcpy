@@ -22,11 +22,15 @@ import type { SinkVideoFrame, ViewerSink } from "./sink.js";
  * knowledge lives here.
  */
 export class WsSink implements ViewerSink {
+  readonly kind = "websocket" as const;
   private readonly queue: SendQueue;
   private frameId = 0;
   private messageHandler: ((message: ClientMessage) => void) | undefined;
 
-  constructor(private readonly ws: WebSocket) {
+  constructor(
+    private readonly ws: WebSocket,
+    readonly remoteAddress: string | null = null,
+  ) {
     this.queue = new SendQueue(ws);
     ws.on("message", (data: Buffer, isBinary: boolean) => {
       if (!isBinary || !this.messageHandler) return;

@@ -74,6 +74,7 @@ interface VideoEntry {
  * `onAttach`; everything after is a `ClientMessage` for the Viewer.
  */
 export class WtSink implements ViewerSink {
+  readonly kind = "webtransport" as const;
   droppedFrames = 0;
   sentBytes = 0;
 
@@ -97,6 +98,7 @@ export class WtSink implements ViewerSink {
     private readonly session: WtSession,
     control: WtBidiStream,
     private readonly onAttach: (serial: string, token: string) => void,
+    readonly remoteAddress: string | null = null,
   ) {
     this.controlWriter = control.writable.getWriter();
     void this.readControl(control.readable);

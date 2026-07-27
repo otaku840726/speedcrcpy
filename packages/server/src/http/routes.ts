@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
+import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -11,6 +12,7 @@ const LoginBody = z.object({ password: z.string() });
 const AddressBody = z.object({ address: z.string().min(3) });
 const PairBody = z.object({ address: z.string().min(3), code: z.string().min(1) });
 const AutoConnectBody = z.object({ address: z.string().min(3), autoConnect: z.boolean() });
+const KickBody = z.object({ viewerId: z.string().optional(), serial: z.string().optional() });
 
 export function registerRoutes(
   app: FastifyInstance,
@@ -18,6 +20,7 @@ export function registerRoutes(
   adbManager: AdbManager,
   thumbnails: ThumbnailManager,
   stats: DeviceStatsManager,
+  sessionManager: SessionManager,
 ): void {
   // Unauthenticated (see the auth hook exemption) so deployment tooling can
   // poll which build is live without a token. `version` is the git SHA.
@@ -103,6 +106,24 @@ export function registerRoutes(
     // 204 until the first poll lands so the client shows placeholders, not stale data.
     if (!cached) return reply.code(204).send();
     return reply.header("Cache-Control", "no-store").send(cached);
+  });
+
+  // Active viewer connections across all sessions.
+  app.get("/api/sessions", async () => sessionManager.listConnections());
+
+  // Evict a viewer by id, or every viewer of a device by serial.
+  app.post("/api/sessions/kick", async (request, reply) => {
+    const body = KickBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    if (body.data.viewerId) {
+      const ok = await sessionManager.kick(body.data.viewerId);
+      return ok ? { ok: true, kicked: 1 } : reply.code(404).send({ error: "not_found" });
+    }
+    if (body.data.serial) {
+      const kicked = await sessionManager.kickDevice(body.data.serial);
+      return { ok: true, kicked };
+    }
+    return reply.code(400).send({ error: "bad_request" });
   });
 }
 

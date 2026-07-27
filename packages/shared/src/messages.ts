@@ -84,7 +84,29 @@ export type ServerMessage =
   | { type: "ping"; pingId: number; sentAt: number }
   | { type: "controlChanged"; controlling: boolean }
   | { type: "deviceGone" }
+  /** Server evicted this viewer (admin kick) — stop reconnecting. */
+  | { type: "kicked" }
   | { type: "error"; message: string };
+
+// ---- connection admin (REST: GET /api/sessions) ----
+
+/** One connected viewer of a device session. */
+export interface ViewerConnection {
+  id: string;
+  transport: "websocket" | "webtransport";
+  /** True for the viewer that currently holds input control. */
+  controlling: boolean;
+  /** Epoch ms when the viewer attached. */
+  connectedAt: number;
+  /** Remote address (X-Forwarded-For / socket), null when unknown. */
+  address: string | null;
+}
+
+export interface SessionConnections {
+  serial: string;
+  deviceName: string;
+  viewers: ViewerConnection[];
+}
 
 // ---- device events websocket (/ws/events) ----
 

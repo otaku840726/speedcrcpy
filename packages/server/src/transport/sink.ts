@@ -47,4 +47,9 @@ export interface ViewerSink {
   onMessage(handler: (message: ClientMessage) => void): void;
   /** Register the handler for transport close / error. */
   onClose(handler: () => void): void;
+
+  /** Wire kind, for connection listings. */
+  readonly kind: "websocket" | "webtransport";
+  /** Remote address (best-effort), null when unknown. */
+  readonly remoteAddress: string | null;
 }

@@ -109,6 +109,52 @@ input:focus {
   opacity: 1;
 }
 
+/* Connection admin panel (homepage) */
+.connections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border, #2a2f37);
+}
+.connections-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.connections-device {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.connections-device-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.connection-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 8px;
+}
+.ctrl-badge {
+  font-size: 11px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0 6px;
+}
+.kick-btn {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
 .device-card {
   background: var(--panel);
   border: 1px solid var(--border);

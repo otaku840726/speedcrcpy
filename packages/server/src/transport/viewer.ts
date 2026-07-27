@@ -1,4 +1,4 @@
-import type { AudioMeta, ClientMessage, ServerMessage, VideoMeta } from "@speedcrcpy/shared";
+import type { AudioMeta, ClientMessage, ServerMessage, VideoMeta, ViewerConnection } from "@speedcrcpy/shared";
 import {
   AndroidKeyCode,
   AndroidKeyEventAction,
@@ -30,7 +30,11 @@ const TOUCH_ACTIONS = {
  * One connected client of a device session: owns the send queue, forwards
  * media packets, and routes incoming control messages.
  */
+let viewerCounter = 0;
+
 export class Viewer implements SessionViewer {
+  readonly id = `v${++viewerCounter}`;
+  readonly connectedAt = Date.now();
   private readonly congestion: ViewerCongestion;
   private readonly unsubscribes: (() => void)[] = [];
   private sentAudioMeta = false;
@@ -128,6 +132,22 @@ export class Viewer implements SessionViewer {
       quality: this.session.quality,
       byAuto: false,
     });
+  }
+
+  connectionInfo(controlling: boolean): ViewerConnection {
+    return {
+      id: this.id,
+      transport: this.sink.kind,
+      controlling,
+      connectedAt: this.connectedAt,
+      address: this.sink.remoteAddress,
+    };
+  }
+
+  /** Admin eviction: tell the client to stop reconnecting, then drop it. */
+  kick(): void {
+    this.sendJson({ type: "kicked" });
+    this.sink.close();
   }
 
   private detach(): void {

@@ -4,7 +4,9 @@ import {
   QUALITY_LADDER,
   sameQuality,
   type QualitySettings,
+  type SessionConnections,
   type VideoCodec,
+  type ViewerConnection,
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
@@ -17,6 +19,10 @@ const RESET_VIDEO_DEBOUNCE_MS = 1_000;
 const SWITCH_TIMEOUT_MS = 8_000;
 
 export interface SessionViewer {
+  readonly id: string;
+  connectionInfo(controlling: boolean): ViewerConnection;
+  /** Admin eviction — stop the client reconnecting and drop it. */
+  kick(): void;
   notifyDeviceGone(): void;
   /**
    * Video stream restarted (quality switch): resend META/config, flush queue.
@@ -131,6 +137,29 @@ export class ManagedSession {
     this.controllingViewer = viewer;
     previous?.notifyControlChanged(false);
     viewer.notifyControlChanged(true);
+  }
+
+  /** Snapshot of attached viewers for the connection admin listing. */
+  connections(): ViewerConnection[] {
+    return [...this.viewers].map((v) => v.connectionInfo(this.controllingViewer === v));
+  }
+
+  /** Evict one viewer by id (returns true if found). detach() runs on close. */
+  kick(viewerId: string): boolean {
+    for (const viewer of this.viewers) {
+      if (viewer.id === viewerId) {
+        viewer.kick();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Evict every viewer of this device; returns how many. */
+  kickAll(): number {
+    const all = [...this.viewers];
+    for (const viewer of all) viewer.kick();
+    return all.length;
   }
 
   get screenOff(): boolean {
@@ -332,6 +361,39 @@ export class SessionManager {
       });
     }
     return pending;
+  }
+
+  /** Active viewer connections across all running sessions (empty ones omitted). */
+  async listConnections(): Promise<SessionConnections[]> {
+    const settled = await Promise.allSettled(this.sessions.values());
+    const out: SessionConnections[] = [];
+    for (const r of settled) {
+      if (r.status !== "fulfilled") continue;
+      const session = r.value;
+      const viewers = session.connections();
+      if (viewers.length > 0) out.push({ serial: session.serial, deviceName: session.deviceName, viewers });
+    }
+    return out;
+  }
+
+  /** Evict a viewer by id from whichever session holds it. */
+  async kick(viewerId: string): Promise<boolean> {
+    const settled = await Promise.allSettled(this.sessions.values());
+    for (const r of settled) {
+      if (r.status === "fulfilled" && r.value.kick(viewerId)) return true;
+    }
+    return false;
+  }
+
+  /** Evict every viewer of one device; returns how many were kicked. */
+  async kickDevice(serial: string): Promise<number> {
+    const pending = this.sessions.get(serial);
+    if (!pending) return 0;
+    try {
+      return (await pending).kickAll();
+    } catch {
+      return 0;
+    }
   }
 
   async closeAll(): Promise<void> {

@@ -1,5 +1,5 @@
-import type { DeviceInfo } from "@speedcrcpy/shared";
-import { useEffect, useState, type FormEvent } from "react";
+import type { DeviceInfo, SessionConnections } from "@speedcrcpy/shared";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { DeviceThumbnail } from "../core/DeviceThumbnail";
@@ -78,7 +78,91 @@ export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) 
           <DeviceCard key={device.serial} device={device} onOpenSession={onOpenSession} onAction={action} />
         ))
       )}
+
+      <ConnectionsPanel />
     </div>
+  );
+}
+
+function fmtAge(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分`;
+  return `${Math.floor(m / 60)} 時`;
+}
+
+/** Live list of viewer connections across all device sessions, with kick. */
+function ConnectionsPanel() {
+  const [sessions, setSessions] = useState<SessionConnections[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      setSessions(await api<SessionConnections[]>("/api/sessions"));
+    } catch {
+      /* transient */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => {
+      if (!document.hidden) {
+        void refresh();
+        setNow(Date.now());
+      }
+    }, 3000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  async function kick(body: { viewerId: string } | { serial: string }) {
+    setBusy(true);
+    try {
+      await api("/api/sessions/kick", { method: "POST", body: JSON.stringify(body) });
+      await refresh();
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const total = sessions.reduce((n, s) => n + s.viewers.length, 0);
+  if (total === 0) return null;
+
+  return (
+    <section className="connections">
+      <header className="connections-head">
+        <span style={{ fontWeight: 600 }}>目前連線</span>
+        <span className="muted">{total}</span>
+      </header>
+      {sessions.map((s) => (
+        <div key={s.serial} className="connections-device">
+          <div className="connections-device-head">
+            <span className="device-name">{s.deviceName}</span>
+            <span className="muted device-sub">{s.serial}</span>
+            <button className="kick-btn" disabled={busy} onClick={() => void kick({ serial: s.serial })}>
+              全部踢掉
+            </button>
+          </div>
+          {s.viewers.map((v) => (
+            <div key={v.id} className="connection-row">
+              <span className={`transport-badge${v.transport === "webtransport" ? " wt" : ""}`}>
+                {v.transport === "webtransport" ? "WT" : "WS"}
+              </span>
+              <span className="muted" style={{ fontFamily: "monospace", fontSize: 12 }}>{v.address ?? "—"}</span>
+              <span className="muted" style={{ fontSize: 12 }}>{fmtAge(now - v.connectedAt)}前</span>
+              {v.controlling && <span className="ctrl-badge">控制中</span>}
+              <button className="kick-btn" disabled={busy} onClick={() => void kick({ viewerId: v.id })}>
+                踢掉
+              </button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
   );
 }
 
