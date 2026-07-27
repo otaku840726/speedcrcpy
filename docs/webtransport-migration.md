@@ -1,6 +1,6 @@
 # WebTransport 遷移設計
 
-狀態:**設計定案,尚未動工**(2026-07-27)
+狀態:**已實作並部署到生產環境**(2026-07-27)。Phase 0 / 1 / 1.5 完成;Phase 2 目前不需要。
 目標讀者:本專案維護者
 
 ## 為什麼要做
@@ -54,33 +54,40 @@
 ### 認證
 Token 放 WT URL query(同現在 WS 的 `?token=`),server 在 session-request handler 驗;或當控制流第一則訊息送。沿用現有 `auth.ts`。
 
-## 需要動的檔案
+## 實作狀態
 
-### Phase 0 — 抽傳輸介面(不改行為,降風險)
-- 從 `packages/server/src/transport/send-queue.ts` 抽出 `ViewerSink` 介面:
-  `sendControl / sendVideoMeta / sendVideoConf / sendVideoFrame / sendAudioMeta / sendAudioData / clearVideo / (backpressure 信號) / close`。
-- `viewer.ts` 改吃 `ViewerSink`(不再直接綁 `ws`);`congestion.ts` 讀 sink 的 backpressure。
-- 實作:`WsSink`(把現況搬進去)。
-- 客戶端 `packages/web/src/core/session-client.ts` 抽 `Transport` 介面;實作 `WsTransport`(現況)。
-- **驗收**:行為與現在完全一致(WS 照跑),只是多了一層介面。
+### Phase 0 — 抽傳輸介面(不改行為) ✅ commit 7227246
+- 伺服器 `packages/server/src/transport/sink.ts` 定義語意化 `ViewerSink`:
+  `sendControl / sendVideoMeta / sendVideoConf / sendVideoFrame / sendAudioMeta / sendAudioData / clearVideo / close` + backpressure getters(`bufferedBytes / sentBytes / droppedFrames`)+ 收發回呼(`onMessage / onClose`)。
+- framing 從 `viewer.ts` 移入 `transport/ws-sink.ts`(`WsSink`,內含既有 `SendQueue`);`viewer.ts` / `congestion.ts` 改吃介面。
+- 客戶端 `packages/web/src/core/session-client.ts` 抽 `SessionTransport` 介面、原 class 改名 `WsTransport`、新增薄 `SessionClient` facade。
+- 行為零改變,WS 照跑(真機驗證)。
 
-### Phase 1 — 加 WebTransport(WS 仍在,可 fallback)
-- 伺服器新增 `packages/server/src/http/webtransport-gateway.ts`(對照 `ws.ts`),用 **`@fails-components/webtransport`**(Node HTTP/3 endpoint,獨立 UDP port,如 :8443)。
-- 實作 `WtSink`:控制流(bidi)+ 音訊流(uni)+ 每影格一條 uni stream + `sendOrder` 優先級 + reset 過期影格。
-- 客戶端 `WtTransport`:`new WebTransport(url)` → 開控制 bidi、收 incoming unidirectional streams(音訊 / 影格)。
-- **Fallback**:`window.WebTransport` 存在且連得上就用 WT,否則退 WS。協定語意(channel / 訊息)完全相同,上層無感。
-- **驗收**:WT 下功能與 WS 等價;`tc netem` 弱網下掉包不再讓畫面 / 輸入停頓。
+### Phase 1 — 加 WebTransport(WS 保留 fallback) ✅ commit 42aa334
+- 伺服器 `packages/server/src/http/wt-gateway.ts`(`Http3Server`,`@fails-components/webtransport` + 原生 `-transport-http3-quiche`)、`transport/wt-sink.ts`(`WtSink implements ViewerSink`:控制 bidi + 音訊 uni + 每影格 uni)、`transport/wt-cert.ts`(`@peculiar/x509` 自簽 ECDSA + DER hash)。
+- 認證:serial + token 走**控制流第一則 attach 訊息**(QUIC 無 cookie,`sessionStream` 精確比對路徑、query 會讓握手失敗);token 由 `/api/wt-info` 發。
+- 憑證:自簽 + `serverCertificateHashes`(ECDSA P-256、≤14 天,免 CA);有 CA 憑證(反代 / Tailscale)時 `/api/wt-info` 的 `certHash` 回 null、client 免 hash。
+- 客戶端 `core/wt-transport.ts`(`WtTransport`);`SessionClient.pick()` 問 `/api/wt-info` 選 WT/WS,首連失敗自動退 WS。
+- 設定:`SPEEDCRCPY_WT_ENABLED`(預設 false)/ `SPEEDCRCPY_WT_PORT`(8443)。
 
-### Phase 2(可選)— 影格改 datagram
-- 若 Phase 1 每影格 stream 在重丟包下仍卡,把影格改 datagram(~1100 B/顆 + 沿用現有 `[frameId][chunkIdx/total]` header 重組),達成真正的「部分影格 = 馬賽克、intra-refresh 癒合」。
-- 解碼器容忍不足時退回既有的 `decoderError → gate`。
+### Phase 1.5 — 弱網丟幀修正 ✅ commit 811cc20
+Phase 1 naive 版在手機/弱網下**比 WS 更差**(真機重現:RTT 383ms、丟幀、可見 macroblock 汙染)。原因與修法:
+- **每影格獨立 stream 不保證順序**,客戶端原本按 stream 讀完順序餵解碼器 → 亂序 → WebCodecs decode error → 重建循環 + 馬賽克。
+  → 客戶端加**依 frameId 重排緩衝**:照解碼順序餵、視窗 8 幀、gap 填不滿就跳過缺幀(靠 intra-refresh 癒合)、丟過期遲到幀、reconnect 重置(server frameId 每連線從 0)。
+- **in-flight cap = 3 太小**:RTT>50ms 就純因延遲丟幀(380ms 路徑合理有 ~23 幀在途)。→ cap 3→64,只當 runaway guard。
+- **`sendOrder` 設反了**(原本新幀優先反而製造亂序)。→ 改**舊幀優先**(`-id`)。
+- **`bufferedBytes` 累加在途幀位元組 = BDP → 誤判壅塞**。→ 改 flow-control 阻塞中的 `outstandingBytes`。
+- 教訓:上面「只渲染最新 → server reset 過期影格」不足以處理**影格間**亂序,真正的解是客戶端重排 + 跳幀;「META/CONF 順序競態」談的是 META-vs-影格,實際更大的坑是**影格-vs-影格**。
 
-## 風險 / 基建
+### Phase 2(可選,目前不需要)— 影格改 datagram
+- 若某天每影格 stream 在極端丟包下仍卡,再把影格改 datagram(~1100 B/顆 + `[frameId][chunkIdx/total]` header 重組)。Phase 1.5 後弱網已明顯改善,暫不需要。
 
-- **native 依賴**:`@fails-components/webtransport` 含 QUIC native 元件 → 破「純 JS」原則;**須確認 arm64 有 prebuilt**(Docker 是 amd64 + arm64)。
-- **TLS + UDP + 憑證**:HTTP/3 需有效憑證 + 開 UDP port。**反向代理對 WebTransport 的 passthrough 很麻煩**,實務上多半讓 WT server 直接終結 TLS;走 Tailscale/VPN 直接開 UDP 最單純。
-- QUIC 加解密比 TCP 略吃 CPU(幾條 stream 無感)。
-- datagram 大小上限(僅 Phase 2 需處理)。
+## 風險 / 基建(實測結果)
+
+- **native 依賴**:`@fails-components/webtransport-transport-http3-quiche`(NAPI v6)在 **darwin-arm64 / linux-x64 / linux-arm64 都有預編譯**(GitHub release),`prebuild-install` 直接下載,Docker(amd64+arm64)**無需 cmake 原始碼建置**。pnpm 需在 `pnpm-workspace.yaml` 的 `allowBuilds` 核准其 build script。→ 「arm64 prebuilt」風險解除。
+- **TLS + UDP + 憑證**:WT 自己終結 TLS、跑獨立 UDP port,**不能走 TCP 反向代理**。自架情境:防火牆把該 UDP port DNAT 直達容器(繞過反代);自簽走 `serverCertificateHashes`、正式憑證免 hash。**企業防火牆(如 Sophos)常預設封 QUIC** → 要在對應規則放行 UDP + 關 QUIC 阻擋,否則 QUIC 到不了伺服器(client 會自動退 WS)。生產已在 Sophos 後方跑通(UDP :50300)。
+- QUIC 加解密比 TCP 略吃 CPU(無感)。
+- **版本探測 / 部署**:`/api/health`(免認證)回 `{ok, version, builtAt}`,`version` = image 烤進去的 git SHA(Dockerfile `ARG GIT_SHA`,CI 帶入);push → CI → Watchtower 自動更新生產,可輪詢 `/api/health` 確認新版上線後自我驗證。
 
 ## 驗證計畫
 
@@ -93,5 +100,5 @@ Token 放 WT URL query(同現在 WS 的 `?token=`),server 在 session-request ha
 
 ## 現況備註
 
-- 傳輸層(WS)已優化到 TCP 這條路的實務極致;本遷移是「跨過 TCP」的下一步。
-- 編碼側已支援 H.264 / H.265 即時切換(H.265 省頻寬),與本遷移正交、互補。
+- 傳輸層(WS)已優化到 TCP 這條路的實務極致;WT 是「跨過 TCP」的下一步,已上線並在弱網下驗證改善(Phase 1.5 後),WS 保留為 fallback。
+- 編碼側支援 H.264 / H.265 即時切換(H.265 省頻寬),與本遷移正交、互補。
