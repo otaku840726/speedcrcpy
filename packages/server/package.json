@@ -9,6 +9,11 @@
     "postinstall": "fetch-scrcpy-server 3.3.4"
   },
   "dependencies": {
+    "@fails-components/webtransport": "1.6.7",
+    "@fails-components/webtransport-transport-http3-quiche": "1.6.7",
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/static": "^8.0.0",
+    "@peculiar/x509": "^2.0.0",
     "@speedcrcpy/shared": "workspace:*",
     "@yume-chan/adb": "^2.6.0",
     "@yume-chan/adb-scrcpy": "^2.3.2",
@@ -16,9 +21,8 @@
     "@yume-chan/fetch-scrcpy-server": "^1.0.0",
     "@yume-chan/scrcpy": "^2.3.0",
     "@yume-chan/stream-extra": "^2.6.1",
-    "@fastify/cookie": "^11.0.0",
-    "@fastify/static": "^8.0.0",
     "fastify": "^5.0.0",
+    "reflect-metadata": "^0.2.2",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },
@@ -30,10 +34,16 @@
     "typescript": "^5.6.0"
   },
   "tsup": {
-    "entry": ["src/index.ts"],
-    "format": ["esm"],
+    "entry": [
+      "src/index.ts"
+    ],
+    "format": [
+      "esm"
+    ],
     "target": "node22",
     "clean": true,
-    "noExternal": ["@speedcrcpy/shared"]
+    "noExternal": [
+      "@speedcrcpy/shared"
+    ]
   }
 }

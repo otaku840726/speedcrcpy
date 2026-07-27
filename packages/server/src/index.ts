@@ -4,10 +4,12 @@ import { loadConfig } from "./config.js";
 import { buildApp } from "./http/app.js";
 import { registerSessionEndpoint } from "./http/session-endpoint.js";
 import { registerEventsEndpoint, WsGateway } from "./http/ws.js";
+import { WtGateway } from "./http/wt-gateway.js";
 import { DeviceStatsManager } from "./scrcpy/device-stats.js";
 import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
+import { loadOrCreateWtCert } from "./transport/wt-cert.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
 // device dropping (EPIPE on a closed adb socket, a scrcpy stream ending
@@ -42,6 +44,31 @@ const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);
 registerSessionEndpoint(gateway, sessionManager);
 
+// Optional WebTransport gateway (HTTP/3). When enabled, clients that support
+// it connect over QUIC; everyone else stays on WebSocket. The cert hash is
+// advertised so browsers can trust the self-signed cert.
+let wtGateway: WtGateway | undefined;
+let wtInfo: { enabled: boolean; port: number; certHash: string | null } = {
+  enabled: false,
+  port: config.wtPort,
+  certHash: null,
+};
+if (config.wtEnabled) {
+  try {
+    const cert = await loadOrCreateWtCert(config.dataDir);
+    wtGateway = new WtGateway(config, auth, sessionManager, cert);
+    await wtGateway.start();
+    wtInfo = { enabled: true, port: config.wtPort, certHash: cert.hashBase64 };
+    app.log.info(`WebTransport gateway ready on udp/${config.wtPort}`);
+  } catch (error) {
+    app.log.error(`WebTransport gateway failed to start: ${error instanceof Error ? error.message : error}`);
+  }
+}
+// Authed (the global /api/ hook already verified the caller). A fresh token
+// is minted for the client to put in its WebTransport attach frame — the QUIC
+// connection carries no auth cookie.
+app.get("/api/wt-info", async () => ({ ...wtInfo, token: wtInfo.enabled ? auth.issue() : null }));
+
 // Listen before starting the adb tracker: Tango's device-track socket is
 // unref'd, so it must not be the only thing keeping the process alive.
 await app.listen({ host: config.host, port: config.port });
@@ -59,6 +86,7 @@ async function shutdown(signal: string): Promise<void> {
   app.log.info(`${signal} received, shutting down`);
   thumbnailManager.stop();
   statsManager.stop();
+  await wtGateway?.stop().catch(() => {});
   await sessionManager.closeAll().catch(() => {});
   await screenManager.stop().catch(() => {});
   await adbManager.stop().catch(() => {});

@@ -7,6 +7,7 @@ import {
   type ServerMessage,
   type VideoMeta,
 } from "@speedcrcpy/shared";
+import { WtTransport, type WtInfo } from "./wt-transport";
 
 export interface VideoFrameData {
   keyframe: boolean;
@@ -188,27 +189,68 @@ export class WsTransport implements SessionTransport {
   }
 }
 
+async function fetchWtInfo(): Promise<WtInfo | null> {
+  try {
+    const res = await fetch("/api/wt-info", { credentials: "same-origin" });
+    if (!res.ok) return null;
+    return (await res.json()) as WtInfo;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Session facade the UI talks to. Owns a pluggable `SessionTransport` (defaults
- * to `WsTransport`); the WebTransport migration injects a different factory
- * here and nothing above this line changes.
+ * Session facade the UI talks to. Picks a transport: WebTransport when the
+ * server advertises it and the browser supports it, otherwise WebSocket — and
+ * falls back to WebSocket if the first WT connect fails. The choice is async
+ * (it asks the server), so sends made before the transport exists are buffered.
+ * Passing `makeTransport` skips selection (used by tests).
  */
 export class SessionClient {
-  private readonly transport: SessionTransport;
+  private transport: SessionTransport | undefined;
+  private closed = false;
+  private readonly pending: ClientMessage[] = [];
 
-  constructor(
-    serial: string,
-    events: SessionClientEvents,
-    makeTransport: SessionTransportFactory = (s, e) => new WsTransport(s, e),
-  ) {
-    this.transport = makeTransport(serial, events);
+  constructor(serial: string, events: SessionClientEvents, makeTransport?: SessionTransportFactory) {
+    if (makeTransport) {
+      this.transport = makeTransport(serial, events);
+      return;
+    }
+    void this.pick(serial, events);
   }
 
   send(message: ClientMessage): void {
-    this.transport.send(message);
+    if (this.transport) this.transport.send(message);
+    else this.pending.push(message);
   }
 
   close(): void {
-    this.transport.close();
+    this.closed = true;
+    this.transport?.close();
+  }
+
+  private async pick(serial: string, events: SessionClientEvents): Promise<void> {
+    const info = await fetchWtInfo();
+    if (this.closed) return;
+    if (info?.enabled && typeof WebTransport !== "undefined") {
+      console.info("[session] transport: WebTransport");
+      const wt = new WtTransport(serial, events, info, () => {
+        // First WT connect failed — drop to WebSocket, once.
+        if (this.closed || this.transport !== wt) return;
+        console.info("[session] WebTransport connect failed, falling back to WebSocket");
+        this.transport = new WsTransport(serial, events);
+        this.flush();
+      });
+      this.transport = wt;
+    } else {
+      console.info("[session] transport: WebSocket");
+      this.transport = new WsTransport(serial, events);
+    }
+    this.flush();
+  }
+
+  private flush(): void {
+    if (!this.transport) return;
+    for (const message of this.pending.splice(0)) this.transport.send(message);
   }
 }

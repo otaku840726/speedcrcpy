@@ -39,8 +39,21 @@ export class Auth {
     }
 
     this.failures.delete(ip);
-    const exp = (now + TOKEN_TTL_MS).toString(16);
-    return { token: `${exp}.${this.sign(exp)}` };
+    return { token: this.mint() };
+  }
+
+  /**
+   * Mint a fresh token for an already-authenticated request. Used to hand the
+   * WebTransport client a token it can put in its attach frame — the QUIC
+   * connection carries no auth cookie, unlike the WS upgrade.
+   */
+  issue(): string {
+    return this.mint();
+  }
+
+  private mint(): string {
+    const exp = (Date.now() + TOKEN_TTL_MS).toString(16);
+    return `${exp}.${this.sign(exp)}`;
   }
 
   verify(token: string | undefined): boolean {

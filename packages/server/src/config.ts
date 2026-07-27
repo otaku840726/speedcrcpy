@@ -48,6 +48,20 @@ const ConfigSchema = z.object({
    * H.264-only, so insecure-context LAN clients must stay on h264).
    */
   videoCodec: z.enum(["h264", "h265"]).default("h264"),
+  /**
+   * Enable the experimental WebTransport (HTTP/3 over QUIC) gateway on its own
+   * UDP port. Crosses TCP head-of-line blocking: each video frame rides its own
+   * QUIC stream, so a lost packet no longer stalls control/audio/other frames.
+   * WebSocket stays available as fallback; clients pick WT only when the browser
+   * supports it and can connect. Off by default (needs an open UDP port + a
+   * self-signed cert whose hash the client trusts).
+   */
+  wtEnabled: z
+    .union([z.boolean(), z.string()])
+    .default(false)
+    .transform((v) => v === true || v === "true" || v === "1" || v === "yes"),
+  /** UDP port for the WebTransport gateway (separate from the HTTP `port`). */
+  wtPort: z.coerce.number().int().min(1).max(65535).default(8443),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -85,6 +99,8 @@ export function loadConfig(): Config {
       ? { statsInterval: process.env.SPEEDCRCPY_STATS_INTERVAL }
       : {}),
     ...(process.env.SPEEDCRCPY_VIDEO_CODEC ? { videoCodec: process.env.SPEEDCRCPY_VIDEO_CODEC } : {}),
+    ...(process.env.SPEEDCRCPY_WT_ENABLED ? { wtEnabled: process.env.SPEEDCRCPY_WT_ENABLED } : {}),
+    ...(process.env.SPEEDCRCPY_WT_PORT ? { wtPort: process.env.SPEEDCRCPY_WT_PORT } : {}),
   };
 
   if (typeof merged.password !== "string" || merged.password.length === 0) {
