@@ -1210,18 +1210,26 @@ option {
   width: min(760px, 100%);
   gap: 10px;
 }
+/* The stage must hug the image exactly: overlays are positioned in % of this
+   box, so any letterboxing (object-fit: contain) would shift every box and the
+   crosshair sideways. Sizing the image and letting the box shrink-wrap it keeps
+   percentages mapping straight onto the picture. */
 .tp-stage {
   position: relative;
+  display: inline-block;
+  align-self: center;
   line-height: 0;
   border-radius: 8px;
   overflow: hidden;
   background: #000;
+  max-width: 100%;
 }
 .tp-stage img {
-  width: 100%;
-  max-height: 62vh;
-  object-fit: contain;
   display: block;
+  max-width: 100%;
+  max-height: 62vh;
+  width: auto;
+  height: auto;
 }
 /* Scanned region: bright frame, everything outside dimmed by a huge shadow. */
 .tp-region {
