@@ -11,6 +11,7 @@ import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
 import { ScriptEngine } from "./scripts/engine.js";
+import { Scheduler } from "./scripts/scheduler.js";
 import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
 
@@ -37,6 +38,7 @@ const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1
 const displayManager = new DisplayManager(adbManager, config.dataDir);
 const scriptStore = new ScriptStore(config.dataDir);
 const scriptEngine = new ScriptEngine(adbManager);
+const scheduler = new Scheduler(scriptStore, scriptEngine);
 const sessionManager = new SessionManager(
   adbManager,
   config.screenOffDefault,
@@ -45,11 +47,11 @@ const sessionManager = new SessionManager(
   (serial, active) => screenManager.setSessionActive(serial, active),
   displayManager,
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, scriptEngine);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, scriptEngine, scheduler);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);
-registerSessionEndpoint(gateway, sessionManager);
+registerSessionEndpoint(gateway, sessionManager, scheduler);
 
 // Optional WebTransport gateway (HTTP/3). When enabled, clients that support
 // it connect over QUIC; everyone else stays on WebSocket. The cert hash is
@@ -83,6 +85,7 @@ await adbManager.start();
 screenManager.start();
 thumbnailManager.start();
 statsManager.start();
+scheduler.start();
 
 app.log.info(`speedcrcpy server ready on ${config.host}:${config.port}`);
 
@@ -93,6 +96,7 @@ async function shutdown(signal: string): Promise<void> {
   app.log.info(`${signal} received, shutting down`);
   thumbnailManager.stop();
   statsManager.stop();
+  scheduler.stop();
   await wtGateway?.stop().catch(() => {});
   await sessionManager.closeAll().catch(() => {});
   await screenManager.stop().catch(() => {});

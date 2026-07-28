@@ -1,10 +1,11 @@
 import { encodeJsonFrame } from "@speedcrcpy/shared";
 import type { SessionManager } from "../scrcpy/session-manager.js";
+import type { Scheduler } from "../scripts/scheduler.js";
 import { Viewer } from "../transport/viewer.js";
 import { WsSink } from "../transport/ws-sink.js";
 import type { WsGateway } from "./ws.js";
 
-export function registerSessionEndpoint(gateway: WsGateway, sessionManager: SessionManager): void {
+export function registerSessionEndpoint(gateway: WsGateway, sessionManager: SessionManager, scheduler?: Scheduler): void {
   gateway.add("/ws/session/*", (ws, request, url) => {
     const serial = decodeURIComponent(url.pathname.slice("/ws/session/".length));
     if (!serial) {
@@ -22,7 +23,7 @@ export function registerSessionEndpoint(gateway: WsGateway, sessionManager: Sess
       .acquire(serial)
       .then((session) => {
         if (ws.readyState !== ws.OPEN) return;
-        new Viewer(new WsSink(ws, address), session).attach();
+        new Viewer(new WsSink(ws, address), session, scheduler).attach();
       })
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "session failed";

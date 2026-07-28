@@ -69,11 +69,32 @@ export type ScriptStep =
       else?: ScriptStep[];
     };
 
+/**
+ * When a script wants to run. `persistent` keeps it running whenever nothing
+ * higher-priority is active; `daily` activates once a day at `time` and
+ * deactivates when that run finishes; `manual` only runs on demand.
+ */
+export type ScriptTrigger =
+  | { type: "manual" }
+  | { type: "persistent" }
+  | { type: "daily"; time: string };
+
+export const PRIORITY_LABELS: { value: number; label: string }[] = [
+  { value: 30, label: "高" },
+  { value: 20, label: "中" },
+  { value: 10, label: "低" },
+];
+
 export interface Script {
   id: string;
   deviceSerial: string;
   name: string;
   steps: ScriptStep[];
+  trigger: ScriptTrigger;
+  /** Higher wins when two scripts want the same device. */
+  priority: number;
+  /** Scheduling opt-out; a disabled script only runs when started by hand. */
+  enabled: boolean;
 }
 
 export type ScriptRunState = "idle" | "running" | "stopping";
@@ -93,4 +114,26 @@ export interface ScriptStatus {
   stepsRun: number;
   startedAt: number | null;
   log: ScriptLogEntry[];
+}
+
+// ---- scheduling overview (REST: GET /api/schedule) ----
+
+export interface ScheduleScript {
+  id: string;
+  name: string;
+  trigger: ScriptTrigger;
+  priority: number;
+  enabled: boolean;
+  /** running = on the device now; waiting = wants the device but outranked or
+   * paused; idle = not currently asking for the device. */
+  state: "running" | "waiting" | "idle";
+  /** Epoch ms of the next daily activation, when known. */
+  nextRunAt: number | null;
+}
+
+export interface DeviceSchedule {
+  serial: string;
+  /** True while recent manual input is holding scripts off the device. */
+  humanActive: boolean;
+  scripts: ScheduleScript[];
 }

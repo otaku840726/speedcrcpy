@@ -11,6 +11,7 @@ import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
+import type { Scheduler } from "../scripts/scheduler.js";
 import type { ScriptStore } from "../scripts/store.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { registerRoutes } from "./routes.js";
@@ -33,6 +34,7 @@ export async function buildApp(
   displayManager: DisplayManager,
   scriptStore: ScriptStore,
   scriptEngine: ScriptEngine,
+  scheduler: Scheduler,
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: { level: "info" } });
   await app.register(fastifyCookie);
@@ -45,7 +47,7 @@ export async function buildApp(
     }
   });
 
-  registerRoutes(app, auth, adbManager, thumbnails, stats, sessionManager, displayManager, scriptStore, scriptEngine);
+  registerRoutes(app, auth, adbManager, thumbnails, stats, sessionManager, displayManager, scriptStore, scriptEngine, scheduler);
 
   // In production the built web app is served by the server itself;
   // in development Vite serves it and proxies /api + /ws here.

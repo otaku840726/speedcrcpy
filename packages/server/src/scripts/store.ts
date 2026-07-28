@@ -13,7 +13,15 @@ export class ScriptStore {
     if (existsSync(this.path)) {
       try {
         const list = JSON.parse(readFileSync(this.path, "utf8")) as Script[];
-        for (const s of list) this.scripts.set(s.id, s);
+        // Scripts saved before scheduling existed have no trigger/priority.
+        for (const s of list) {
+          this.scripts.set(s.id, {
+            ...s,
+            trigger: s.trigger ?? { type: "manual" },
+            priority: s.priority ?? 20,
+            enabled: s.enabled ?? true,
+          });
+        }
       } catch {
         /* corrupt file — start empty */
       }

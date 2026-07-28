@@ -8,6 +8,7 @@ import {
   type ScrcpyMediaStreamPacket,
 } from "@yume-chan/scrcpy";
 import type { ManagedSession, SessionViewer } from "../scrcpy/session-manager.js";
+import type { Scheduler } from "../scripts/scheduler.js";
 import { ViewerCongestion } from "./congestion.js";
 import type { ViewerSink } from "./sink.js";
 
@@ -44,6 +45,8 @@ export class Viewer implements SessionViewer {
   constructor(
     private readonly sink: ViewerSink,
     private readonly session: ManagedSession,
+    /** Told about real input so running scripts yield the device to the human. */
+    private readonly scheduler?: Scheduler,
   ) {
     this.congestion = new ViewerCongestion(this.sink, {
       sendPing: (pingId, sentAt) => this.sendJson({ type: "ping", pingId, sentAt }),
@@ -250,6 +253,9 @@ export class Viewer implements SessionViewer {
     if ((message.type === "touch" || message.type === "scroll") && (message.vw <= 0 || message.vh <= 0)) {
       return;
     }
+
+    // Real input from a person: hold automation off the device for a while.
+    this.scheduler?.noteHumanInput(this.session.serial);
 
     // Position-dependent input goes through the VIDEO instance's controller —
     // its capture size is the frame the viewer sees. The persistent control

@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import type { Auth } from "../auth.js";
 import type { Config } from "../config.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
+import type { Scheduler } from "../scripts/scheduler.js";
 import type { WtCert } from "../transport/wt-cert.js";
 import { Viewer } from "../transport/viewer.js";
 import { WtSink, type WtBidiStream, type WtSession } from "../transport/wt-sink.js";
@@ -37,6 +38,7 @@ export class WtGateway {
     private readonly auth: Auth,
     private readonly sessionManager: SessionManager,
     cert: WtCert,
+    private readonly scheduler?: Scheduler,
   ) {
     this.server = new Http3Server({
       port: config.wtPort,
@@ -88,7 +90,7 @@ export class WtGateway {
           .acquire(serial)
           .then((managed) => {
             console.log(`[wt] viewer attached over WebTransport for ${serial}`);
-            new Viewer(sink, managed).attach();
+            new Viewer(sink, managed, this.scheduler).attach();
           })
           .catch((error: unknown) => {
             console.error(`[wt] failed to start ${serial}:`, error instanceof Error ? error.message : error);

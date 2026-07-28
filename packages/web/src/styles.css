@@ -1076,3 +1076,43 @@ input:focus {
   background: none;
   border-style: dashed;
 }
+
+/* automation scheduling */
+.sp-sched {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sp-sched select,
+.sp-sched input[type="time"] {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.sp-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.sched-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5a6672;
+  flex: none;
+}
+.sched-dot.running {
+  background: #3ddc84;
+}
+.sched-dot.waiting {
+  background: #f0a94b;
+}
+.sched-human {
+  font-size: 11px;
+  color: #f0a94b;
+  border: 0.5px solid #f0a94b;
+  border-radius: 6px;
+  padding: 0 6px;
+}

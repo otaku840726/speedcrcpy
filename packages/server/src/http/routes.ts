@@ -7,6 +7,7 @@ import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
+import type { Scheduler } from "../scripts/scheduler.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
@@ -66,10 +67,18 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
     }),
   ]),
 );
+const TriggerSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("manual") }),
+  z.object({ type: z.literal("persistent") }),
+  z.object({ type: z.literal("daily"), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }),
+]);
 const ScriptBody = z.object({
   id: z.string().optional(),
   name: z.string().min(1).max(60),
   steps: z.array(StepSchema).max(200),
+  trigger: TriggerSchema.default({ type: "manual" }),
+  priority: z.coerce.number().int().min(0).max(100).default(20),
+  enabled: z.boolean().default(true),
 });
 
 const DisplayBody = z.object({
@@ -89,6 +98,7 @@ export function registerRoutes(
   displayManager: DisplayManager,
   scriptStore: ScriptStore,
   scriptEngine: ScriptEngine,
+  scheduler: Scheduler,
 ): void {
   // Unauthenticated (see the auth hook exemption) so deployment tooling can
   // poll which build is live without a token. `version` is the git SHA.
@@ -253,17 +263,16 @@ export function registerRoutes(
   app.post<{ Params: { id: string } }>("/api/scripts/:id/run", async (request, reply) => {
     const script = scriptStore.get(request.params.id);
     if (!script) return reply.code(404).send({ error: "not_found" });
-    try {
-      await scriptEngine.start(script);
-      return { ok: true };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "start_failed" });
-    }
+    scheduler.requestRun(script);
+    return { ok: true };
   });
 
-  app.post<{ Params: { serial: string } }>("/api/devices/:serial/script/stop", async (request) => ({
-    ok: scriptEngine.stop(request.params.serial),
-  }));
+  app.get("/api/schedule", async () => scheduler.overview());
+
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/script/stop", async (request) => {
+    scheduler.cancel(request.params.serial);
+    return { ok: true };
+  });
 
   app.get<{ Params: { serial: string } }>("/api/devices/:serial/script/status", async (request) =>
     scriptEngine.status(request.params.serial),

@@ -1,4 +1,4 @@
-import type { DeviceInfo, SessionConnections } from "@speedcrcpy/shared";
+import type { DeviceInfo, DeviceSchedule, SessionConnections } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../api";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
@@ -79,8 +79,58 @@ export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) 
         ))
       )}
 
+      <SchedulePanel />
       <ConnectionsPanel />
     </div>
+  );
+}
+
+/** All devices' automation scripts: what's running, waiting, and due next. */
+function SchedulePanel() {
+  const [devices, setDevices] = useState<DeviceSchedule[]>([]);
+
+  useEffect(() => {
+    const tick = () => {
+      if (document.hidden) return;
+      api<DeviceSchedule[]>("/api/schedule").then(setDevices).catch(() => {});
+    };
+    tick();
+    const timer = setInterval(tick, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const total = devices.reduce((n, d) => n + d.scripts.length, 0);
+  if (total === 0) return null;
+
+  const triggerLabel = (s: DeviceSchedule["scripts"][number]) =>
+    s.trigger.type === "daily" ? `每日 ${s.trigger.time}` : s.trigger.type === "persistent" ? "常駐" : "手動";
+
+  return (
+    <section className="connections">
+      <header className="connections-head">
+        <span style={{ fontWeight: 600 }}>自動化排程</span>
+        <span className="muted">{total}</span>
+      </header>
+      {devices.map((d) => (
+        <div key={d.serial} className="connections-device">
+          <div className="connections-device-head">
+            <span className="device-sub muted">{d.serial}</span>
+            {d.humanActive && <span className="sched-human">手動操作中 · 腳本暫讓</span>}
+          </div>
+          {d.scripts.map((s) => (
+            <div key={s.id} className="connection-row">
+              <span className={`sched-dot ${s.state}`} />
+              <span>{s.name}</span>
+              <span className="muted" style={{ fontSize: 12 }}>{triggerLabel(s)}</span>
+              {!s.enabled && <span className="muted" style={{ fontSize: 11 }}>已停用</span>}
+              <span style={{ marginLeft: "auto", fontSize: 11 }} className="muted">
+                {s.state === "running" ? "執行中" : s.state === "waiting" ? "等待中" : s.nextRunAt ? `下次 ${new Date(s.nextRunAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
   );
 }
 

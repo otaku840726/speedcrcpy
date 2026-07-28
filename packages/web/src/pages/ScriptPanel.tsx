@@ -1,4 +1,4 @@
-import type { Script, ScriptKey, ScriptStatus, ScriptStep, ScriptTemplate } from "@speedcrcpy/shared";
+import { PRIORITY_LABELS, type Script, type ScriptKey, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -425,7 +425,7 @@ function AddMenu({ onAdd }: { onAdd: (step: ScriptStep) => void }) {
 
 export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () => void }) {
   const [scripts, setScripts] = useState<Script[]>([]);
-  const [draft, setDraft] = useState<{ id?: string; name: string; steps: ScriptStep[] }>();
+  const [draft, setDraft] = useState<{ id?: string; name: string; steps: ScriptStep[]; trigger: ScriptTrigger; priority: number; enabled: boolean }>();
   const [status, setStatus] = useState<ScriptStatus>();
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
@@ -465,7 +465,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
         method: "POST",
         body: JSON.stringify(draft),
       });
-      setDraft({ id: saved.id, name: saved.name, steps: saved.steps });
+      setDraft({ id: saved.id, name: saved.name, steps: saved.steps, trigger: saved.trigger, priority: saved.priority, enabled: saved.enabled });
       await reload();
     } finally {
       setBusy(false);
@@ -511,7 +511,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
           value={draft?.id ?? ""}
           onChange={(e) => {
             const found = scripts.find((s) => s.id === e.target.value);
-            setDraft(found ? { id: found.id, name: found.name, steps: found.steps } : undefined);
+            setDraft(found ? { id: found.id, name: found.name, steps: found.steps, trigger: found.trigger, priority: found.priority, enabled: found.enabled } : undefined);
           }}
         >
           <option value="">— 選擇腳本 —</option>
@@ -519,7 +519,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <button onClick={() => setDraft({ name: "新腳本", steps: [] })}>新建</button>
+        <button onClick={() => setDraft({ name: "新腳本", steps: [], trigger: { type: "manual" }, priority: 20, enabled: true })}>新建</button>
         {draft?.id && (
           <button
             title="刪除腳本"
@@ -539,6 +539,38 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
           <div className="sp-name">
             <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="腳本名稱" />
             <button className="primary" disabled={busy} onClick={() => void save()}>儲存</button>
+          </div>
+
+          <div className="sp-sched">
+            <select
+              value={draft.trigger.type}
+              onChange={(e) => {
+                const type = e.target.value as ScriptTrigger["type"];
+                setDraft({ ...draft, trigger: type === "daily" ? { type, time: "09:00" } : { type } });
+              }}
+            >
+              <option value="manual">手動</option>
+              <option value="persistent">常駐</option>
+              <option value="daily">每日</option>
+            </select>
+            {draft.trigger.type === "daily" && (
+              <input
+                type="time"
+                value={draft.trigger.time}
+                onChange={(e) => setDraft({ ...draft, trigger: { type: "daily", time: e.target.value } })}
+              />
+            )}
+            <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })}>
+              {PRIORITY_LABELS.map((p) => (
+                <option key={p.value} value={p.value}>優先 {p.label}</option>
+              ))}
+            </select>
+            {draft.trigger.type !== "manual" && (
+              <label className="sp-enable">
+                <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+                啟用
+              </label>
+            )}
           </div>
 
           <div className="sp-steps">
