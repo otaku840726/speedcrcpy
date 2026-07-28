@@ -66,6 +66,8 @@ export class Scheduler {
 
   start(): void {
     this.timer ??= setInterval(() => void this.tick().catch(() => {}), TICK_MS);
+    // React the instant a device frees up rather than on the next tick.
+    this.engine.onDeviceIdle(() => void this.tick().catch(() => {}));
   }
 
   stop(): void {
@@ -152,12 +154,14 @@ export class Scheduler {
       const status = this.engine.status(serial);
       const running = status.state === "idle" ? null : status.scriptId;
 
-      // A run that ended: drop one-shot activations, and give persistent ones
-      // a breather before they start again.
+      // A run that ended: drop one-shot activations, and give a persistent one
+      // a breather so a script that finishes instantly can't spin. The breather
+      // must NOT apply to one-shot work (a manual run, a daily firing) — that
+      // would make pressing 執行 wait seconds for no reason.
       if (state.lastRunning && !running) {
         const activation = state.activations.get(state.lastRunning);
         if (activation?.oneShot) state.activations.delete(state.lastRunning);
-        state.restartAfter = Date.now() + RESTART_DELAY_MS;
+        else state.restartAfter = Date.now() + RESTART_DELAY_MS;
       }
       state.lastRunning = running;
 
@@ -176,7 +180,9 @@ export class Scheduler {
         continue;
       }
 
-      if (!desired || Date.now() < state.restartAfter) continue;
+      if (!desired) continue;
+      // Only a persistent restart waits out the breather.
+      if (!desired.oneShot && Date.now() < state.restartAfter) continue;
       const script = this.store.get(desired.scriptId);
       if (!script) {
         state.activations.delete(desired.scriptId);

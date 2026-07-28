@@ -71,8 +71,15 @@ export class ScriptEngine {
   private readonly runs = new Map<string, Run>();
   /** Last finished run per device, so the UI can still show its outcome + log. */
   private readonly finished = new Map<string, Run>();
+  /** Notified the moment a device frees up, so the scheduler can fill it
+   * immediately instead of waiting for its next tick. */
+  private onIdle: ((serial: string) => void) | undefined;
 
   constructor(private readonly adbManager: AdbManager) {}
+
+  onDeviceIdle(handler: (serial: string) => void): void {
+    this.onIdle = handler;
+  }
 
   isRunning(serial: string): boolean {
     return this.runs.has(serial);
@@ -137,6 +144,7 @@ export class ScriptEngine {
         // readable until the next run replaces it.
         this.runs.delete(serial);
         this.finished.set(serial, run);
+        this.onIdle?.(serial);
       });
   }
 
@@ -356,8 +364,18 @@ export class ScriptEngine {
    * returns 1920x1080, which would send every tap to the wrong place.
    */
   private async frameSize(adb: Adb): Promise<{ width: number; height: number }> {
-    const frame = await capture(adb);
-    return { width: frame.width, height: frame.height };
+    // Derived from `wm size` + rotation rather than a screencap: a capture costs
+    // ~350 ms on an idle device but 5-9 s while a heavy game renders, which
+    // would stall every script start. Vision steps correct this for free via
+    // syncSize, since they hold a real frame anyway.
+    const out = await sh(adb, "wm size; dumpsys display | grep -m1 -oE 'mCurrentOrientation=[0-9]+'");
+    const size = out.match(/Override size:\s*(\d+)x(\d+)/) ?? out.match(/Physical size:\s*(\d+)x(\d+)/);
+    if (!size) throw new Error("could not read wm size");
+    const width = Number(size[1]);
+    const height = Number(size[2]);
+    // `wm size` reports the unrotated logical size; landscape swaps the axes.
+    const rotation = Number(out.match(/mCurrentOrientation=(\d+)/)?.[1] ?? 0);
+    return rotation === 1 || rotation === 3 ? { width: height, height: width } : { width, height };
   }
 
   private checkStop(run: Run): void {
