@@ -6,6 +6,8 @@ import { AUTH_COOKIE, type Auth } from "../auth.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
+import type { ScriptEngine } from "../scripts/engine.js";
+import type { ScriptStore } from "../scripts/store.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -14,6 +16,25 @@ const AddressBody = z.object({ address: z.string().min(3) });
 const PairBody = z.object({ address: z.string().min(3), code: z.string().min(1) });
 const AutoConnectBody = z.object({ address: z.string().min(3), autoConnect: z.boolean() });
 const KickBody = z.object({ viewerId: z.string().optional(), serial: z.string().optional() });
+const ScriptKeyEnum = z.enum(["back", "home", "recents", "power", "wake", "volumeUp", "volumeDown"]);
+const norm = z.coerce.number().min(0).max(1);
+/** Step tree — recursive because `loop` nests a body. */
+const StepSchema: z.ZodType<unknown> = z.lazy(() =>
+  z.discriminatedUnion("type", [
+    z.object({ type: z.literal("tap"), x: norm, y: norm }),
+    z.object({ type: z.literal("swipe"), x1: norm, y1: norm, x2: norm, y2: norm, durationMs: z.coerce.number().int().min(1).max(60_000) }),
+    z.object({ type: z.literal("wait"), minMs: z.coerce.number().int().min(0).max(600_000), maxMs: z.coerce.number().int().min(0).max(600_000) }),
+    z.object({ type: z.literal("text"), value: z.string().max(1000) }),
+    z.object({ type: z.literal("key"), key: ScriptKeyEnum }),
+    z.object({ type: z.literal("loop"), count: z.coerce.number().int().min(0).max(1_000_000), body: z.array(StepSchema).max(200) }),
+  ]),
+);
+const ScriptBody = z.object({
+  id: z.string().optional(),
+  name: z.string().min(1).max(60),
+  steps: z.array(StepSchema).max(200),
+});
+
 const DisplayBody = z.object({
   reset: z.boolean().optional(),
   width: z.coerce.number().int().min(100).max(5000).optional(),
@@ -29,6 +50,8 @@ export function registerRoutes(
   stats: DeviceStatsManager,
   sessionManager: SessionManager,
   displayManager: DisplayManager,
+  scriptStore: ScriptStore,
+  scriptEngine: ScriptEngine,
 ): void {
   // Unauthenticated (see the auth hook exemption) so deployment tooling can
   // poll which build is live without a token. `version` is the git SHA.
@@ -162,6 +185,41 @@ export function registerRoutes(
       return reply.code(502).send({ error: error instanceof Error ? error.message : "apply_failed" });
     }
   });
+
+  // ---- automation scripts ----
+
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request) =>
+    scriptStore.list(request.params.serial),
+  );
+
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request, reply) => {
+    const body = ScriptBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    return scriptStore.save({ ...body.data, deviceSerial: request.params.serial } as never);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (request, reply) =>
+    scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" }),
+  );
+
+  app.post<{ Params: { id: string } }>("/api/scripts/:id/run", async (request, reply) => {
+    const script = scriptStore.get(request.params.id);
+    if (!script) return reply.code(404).send({ error: "not_found" });
+    try {
+      await scriptEngine.start(script);
+      return { ok: true };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "start_failed" });
+    }
+  });
+
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/script/stop", async (request) => ({
+    ok: scriptEngine.stop(request.params.serial),
+  }));
+
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/script/status", async (request) =>
+    scriptEngine.status(request.params.serial),
+  );
 }
 
 function describeAdbError(error: unknown): string {

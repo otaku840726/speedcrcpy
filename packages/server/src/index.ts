@@ -10,6 +10,8 @@ import { DisplayManager } from "./scrcpy/display-override.js";
 import { ScreenManager } from "./scrcpy/screen-manager.js";
 import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
+import { ScriptEngine } from "./scripts/engine.js";
+import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
@@ -33,6 +35,8 @@ const screenManager = new ScreenManager(adbManager, config.screenOffDefault);
 const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterval * 1000);
 const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1000);
 const displayManager = new DisplayManager(adbManager, config.dataDir);
+const scriptStore = new ScriptStore(config.dataDir);
+const scriptEngine = new ScriptEngine(adbManager);
 const sessionManager = new SessionManager(
   adbManager,
   config.screenOffDefault,
@@ -41,7 +45,7 @@ const sessionManager = new SessionManager(
   (serial, active) => screenManager.setSessionActive(serial, active),
   displayManager,
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, scriptEngine);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);
