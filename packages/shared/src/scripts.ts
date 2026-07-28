@@ -124,6 +124,15 @@ export interface ScriptLogEntry {
   message: string;
 }
 
+/** Why a script that wants the device isn't running yet. */
+export type ScriptPendingReason =
+  /** Waiting its turn (starting, or the device is briefly busy). */
+  | "queued"
+  /** Held off because someone is touching the device. */
+  | "humanActive"
+  /** Another, higher-priority script has the device. */
+  | "outranked";
+
 export interface ScriptStatus {
   serial: string;
   scriptId: string | null;
@@ -133,6 +142,9 @@ export interface ScriptStatus {
   stepsRun: number;
   startedAt: number | null;
   log: ScriptLogEntry[];
+  /** Set while a script is queued for this device but not yet running, so the
+   * UI can explain the wait instead of looking unresponsive. */
+  pending: { scriptId: string; scriptName: string; reason: ScriptPendingReason } | null;
 }
 
 // ---- scheduling overview (REST: GET /api/schedule) ----

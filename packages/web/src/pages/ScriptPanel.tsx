@@ -96,6 +96,8 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>();
   const [probeText, setProbeText] = useState<string>();
+  /** Set the moment 執行 is clicked so the UI responds before the server does. */
+  const [starting, setStarting] = useState(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
@@ -504,6 +506,8 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
   const [error, setError] = useState<string>();
   const [probeText, setProbeText] = useState<string>();
+  /** Set the moment 執行 is clicked so the UI responds before the server does. */
+  const [starting, setStarting] = useState(false);
 
   const reload = useCallback(async () => {
     setScripts(await api<Script[]>(`/api/devices/${encodeURIComponent(serial)}/scripts`).catch(() => []));
@@ -521,12 +525,12 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
         .then((s) => alive && setStatus(s))
         .catch(() => {});
     void tick();
-    const timer = setInterval(tick, 1000);
+    const timer = setInterval(tick, starting ? 300 : 1000);
     return () => {
       alive = false;
       clearInterval(timer);
     };
-  }, [serial]);
+  }, [serial, starting]);
 
   /** Run OCR on a region now and show the result — stylised fonts get characters
    * wrong, so authors should match on whatever actually comes back. */
@@ -562,6 +566,25 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   };
 
   const running = status?.state === "running" || status?.state === "stopping";
+  // Stop showing "啟動中" once the server reports it running or explains the wait.
+  useEffect(() => {
+    if (starting && (running || status?.pending)) setStarting(false);
+  }, [starting, running, status?.pending]);
+
+  const waitLabel =
+    status?.pending?.reason === "humanActive"
+      ? "手動操作中,腳本暫讓(停手約 15 秒後自動接手)"
+      : status?.pending?.reason === "outranked"
+        ? `排隊中:等「${status.scriptName ?? "另一支腳本"}」結束`
+        : status?.pending
+          ? "排隊中…"
+          : undefined;
+
+  const activity = running
+    ? `執行中:${status?.scriptName ?? ""}${status?.stepsRun ? ` · 第 ${status.stepsRun} 步` : ""}`
+    : starting
+      ? "啟動中…"
+      : waitLabel;
 
   return (
     <div className="script-panel">
@@ -579,21 +602,29 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
         ) : (
           <button
             className="sp-run"
-            disabled={!draft?.id || busy}
             onClick={() => {
               setError(undefined);
-              void api(`/api/scripts/${draft?.id}/run`, { method: "POST" }).catch((e: unknown) =>
-                setError(e instanceof Error ? e.message : "執行失敗"),
-              );
+              setStarting(true);
+              void api(`/api/scripts/${draft?.id}/run`, { method: "POST" }).catch((e: unknown) => {
+                setStarting(false);
+                setError(e instanceof Error ? e.message : "執行失敗");
+              });
             }}
+            disabled={!draft?.id || busy || starting}
           >
-            <Icon name="play" size={14} /> 執行
+            <Icon name="play" size={14} /> {starting ? "啟動中…" : "執行"}
           </button>
         )}
         <button onClick={onClose} title="關閉">✕</button>
       </div>
 
       {error && <p className="error-text">{error}</p>}
+      {activity && (
+        <div className={`sp-activity${running ? " run" : ""}`}>
+          <span className="sp-dot" />
+          {activity}
+        </div>
+      )}
 
       <div className="sp-scripts">
         <select

@@ -1,4 +1,4 @@
-import type { DeviceSchedule, ScheduleScript, Script } from "@speedcrcpy/shared";
+import type { DeviceSchedule, ScheduleScript, Script, ScriptPendingReason } from "@speedcrcpy/shared";
 import type { ScriptEngine } from "./engine.js";
 import type { ScriptStore } from "./store.js";
 
@@ -98,6 +98,25 @@ export class Scheduler {
     const running = this.engine.status(serial).scriptId;
     if (running) state.activations.delete(running);
     this.engine.stop(serial);
+  }
+
+  /**
+   * The script queued for a device but not yet running, and why — so the UI can
+   * say "queued" / "you're touching the device" instead of looking dead.
+   */
+  pending(serial: string): { scriptId: string; reason: ScriptPendingReason } | null {
+    const state = this.devices.get(serial);
+    if (!state) return null;
+    const desired = this.pick(state);
+    if (!desired) return null;
+
+    const status = this.engine.status(serial);
+    const running = status.state === "idle" ? null : status.scriptId;
+    if (running === desired.scriptId) return null; // it's the one running
+
+    if (this.humanActive(serial)) return { scriptId: desired.scriptId, reason: "humanActive" };
+    if (running) return { scriptId: desired.scriptId, reason: "outranked" };
+    return { scriptId: desired.scriptId, reason: "queued" };
   }
 
   overview(): DeviceSchedule[] {

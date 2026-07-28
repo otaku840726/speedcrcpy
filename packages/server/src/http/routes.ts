@@ -307,9 +307,17 @@ export function registerRoutes(
     return { ok: true };
   });
 
-  app.get<{ Params: { serial: string } }>("/api/devices/:serial/script/status", async (request) =>
-    scriptEngine.status(request.params.serial),
-  );
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/script/status", async (request) => {
+    const serial = request.params.serial;
+    const status = scriptEngine.status(serial);
+    const queued = scheduler.pending(serial);
+    return {
+      ...status,
+      pending: queued
+        ? { ...queued, scriptName: scriptStore.get(queued.scriptId)?.name ?? "" }
+        : null,
+    };
+  });
 }
 
 function describeAdbError(error: unknown): string {

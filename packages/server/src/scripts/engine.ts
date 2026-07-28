@@ -89,7 +89,7 @@ export class ScriptEngine {
     const run = this.runs.get(serial);
     const last = run ?? this.finished.get(serial);
     if (!last) {
-      return { serial, scriptId: null, scriptName: null, state: "idle", stepsRun: 0, startedAt: null, log: [] };
+      return { serial, scriptId: null, scriptName: null, state: "idle", stepsRun: 0, startedAt: null, log: [], pending: null };
     }
     return {
       serial,
@@ -99,6 +99,7 @@ export class ScriptEngine {
       stepsRun: last.stepsRun,
       startedAt: last.startedAt,
       log: last.log,
+      pending: null,
     };
   }
 
