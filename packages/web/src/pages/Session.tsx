@@ -22,6 +22,7 @@ import { attachInput } from "../core/input";
 import { SessionClient, type TransportKind } from "../core/session-client";
 import { VideoPipeline } from "../core/video-pipeline";
 import { DeviceRail } from "./DeviceRail";
+import { ScriptPanel } from "./ScriptPanel";
 
 const isWideScreen = () => (typeof window !== "undefined" ? window.innerWidth >= 700 : true);
 
@@ -88,6 +89,7 @@ export function Session({
   const [controlling, setControlling] = useState(true);
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
+  const [scriptsOpen, setScriptsOpen] = useState(false);
   const [controlHint, setControlHint] = useState(false);
   const hintTimerRef = useRef<number | undefined>(undefined);
   // Sound is muted by default every session; a user tap unmutes (which also
@@ -496,6 +498,13 @@ export function Session({
                 >
                   <Icon name="motherboard" />
                 </button>
+                <button
+                  title="自動化腳本"
+                  onClick={() => setScriptsOpen((v) => !v)}
+                  style={scriptsOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                >
+                  <Icon name="robot" />
+                </button>
               </div>
             </div>
           </div>
@@ -544,6 +553,7 @@ export function Session({
             )}
           </>
         )}
+        {scriptsOpen && <ScriptPanel serial={serial} onClose={() => setScriptsOpen(false)} />}
         {clipboardToast !== undefined && (
           <button
             className="clipboard-toast"
