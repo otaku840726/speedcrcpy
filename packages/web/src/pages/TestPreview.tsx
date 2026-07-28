@@ -1,4 +1,4 @@
-import type { ScriptRegion, ScriptTemplate } from "@speedcrcpy/shared";
+import { scriptTextTapPoint, type ScriptRegion, type ScriptTemplate } from "@speedcrcpy/shared";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 
@@ -84,8 +84,14 @@ export function TestPreview({
       : match && match.score >= target.threshold
         ? match
         : undefined;
-  const tapX = hit?.x;
-  const tapY = hit?.y;
+  // For text, aim at the matched words inside the line (the engine does the
+  // same) — a line often spans an icon and its label.
+  const tapAt =
+    hit && wanted && target.kind === "ocr"
+      ? scriptTextTapPoint(hit as { text: string; x: number; y: number; w: number; h: number }, wanted)
+      : hit;
+  const tapX = tapAt?.x;
+  const tapY = tapAt?.y;
 
   return (
     <div className="picker-backdrop" onClick={onClose}>

@@ -1,3 +1,4 @@
+import { scriptTextTapPoint } from "@speedcrcpy/shared";
 import type {
   Script,
   ScriptKey,
@@ -303,7 +304,10 @@ export class ScriptEngine {
           const result = await recognize(frame, step.region);
           const line = result.lines.find((l) => textMatches(l.text, step.text));
           if (line) {
-            const [px, py] = this.toPixels(run, line.x, line.y);
+            // OCR merges a whole horizontal band into one line, so aim at the
+            // matched words rather than the line's centre.
+            const point = scriptTextTapPoint(line, step.text);
+            const [px, py] = this.toPixels(run, point.x, point.y);
             await sh(adb, `input tap ${px} ${py}`);
             this.log(run, `找到文字「${line.text}」→ 點擊 ${px},${py} (${result.ms}ms)`);
             return;

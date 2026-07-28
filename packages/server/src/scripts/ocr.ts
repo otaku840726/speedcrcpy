@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { scriptTextMatches } from "@speedcrcpy/shared";
 import { PNG } from "pngjs";
 import type { Frame, Region } from "./vision.js";
 
@@ -101,11 +102,8 @@ export async function recognize(frame: Frame, region?: Region): Promise<OcrResul
   }
 }
 
-/** Whitespace-insensitive containment, the way a script author means it. */
-export function textMatches(haystack: string, needle: string): boolean {
-  const strip = (s: string) => s.replace(/\s+/g, "").toLowerCase();
-  return strip(haystack).includes(strip(needle));
-}
+/** Whitespace-insensitive containment (shared with the editor so they agree). */
+export const textMatches = scriptTextMatches;
 
 /** First number in the text (handles thousands separators and decimals). */
 export function parseNumber(text: string): number | null {
