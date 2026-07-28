@@ -59,6 +59,47 @@ input:focus {
   border-color: var(--accent);
 }
 
+/* Selects: the native control looks foreign in a dark UI, so drop its chrome
+   and match the input/button styling, with our own chevron. */
+select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background-color: var(--bg);
+  background-image: url("data:image/svg+xml;charset=utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b98a5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  background-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 26px 7px 10px;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+select:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* The popup list is drawn by the OS; give it our colours where that's honoured. */
+option {
+  background: var(--panel);
+  color: var(--text);
+}
+
 .center-page {
   height: 100%;
   display: flex;
@@ -723,19 +764,10 @@ input:focus {
 }
 
 .quality-row select {
-  font: inherit;
   font-size: 13px;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 4px 6px;
-  min-width: 96px;
-}
-
-.quality-row select:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  padding: 4px 24px 4px 8px;
+  min-width: 104px;
 }
 
 .quality-auto {
@@ -934,6 +966,13 @@ input:focus {
   font-size: 11px;
   color: var(--text-dim);
 }
+/* Selects inside a step row sit beside tiny inputs — keep them the same height. */
+.sp-step select {
+  font-size: 12px;
+  padding: 3px 22px 3px 8px;
+  border-radius: 6px;
+}
+
 .sp-num {
   width: 54px;
   padding: 3px 5px;
@@ -1084,7 +1123,11 @@ input:focus {
   align-items: center;
   flex-wrap: wrap;
 }
-.sp-sched select,
+.sp-sched select {
+  font-size: 12px;
+  padding: 3px 22px 3px 8px;
+  border-radius: 6px;
+}
 .sp-sched input[type="time"] {
   font-size: 12px;
   padding: 3px 6px;
