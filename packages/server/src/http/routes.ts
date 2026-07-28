@@ -8,6 +8,7 @@ import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
 import type { ScriptStore } from "../scripts/store.js";
+import { captureScreenshot } from "../scrcpy/screenshot.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -18,6 +19,15 @@ const AutoConnectBody = z.object({ address: z.string().min(3), autoConnect: z.bo
 const KickBody = z.object({ viewerId: z.string().optional(), serial: z.string().optional() });
 const ScriptKeyEnum = z.enum(["back", "home", "recents", "power", "wake", "volumeUp", "volumeDown"]);
 const norm = z.coerce.number().min(0).max(1);
+const HexColor = z.string().regex(/^#?[0-9a-fA-F]{6}$/);
+const Timeout = z.coerce.number().int().min(0).max(600_000);
+const RegionSchema = z.object({ x: norm, y: norm, w: norm, h: norm });
+/** Base64 PNG capped at ~1 MB encoded, plus the size it was captured at. */
+const TemplateSchema = z.object({
+  png: z.string().min(1).max(1_400_000),
+  capturedWidth: z.coerce.number().int().min(1).max(8192),
+  capturedHeight: z.coerce.number().int().min(1).max(8192),
+});
 /** Step tree — recursive because `loop` nests a body. */
 const StepSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
@@ -27,6 +37,33 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
     z.object({ type: z.literal("text"), value: z.string().max(1000) }),
     z.object({ type: z.literal("key"), key: ScriptKeyEnum }),
     z.object({ type: z.literal("loop"), count: z.coerce.number().int().min(0).max(1_000_000), body: z.array(StepSchema).max(200) }),
+    z.object({ type: z.literal("waitColor"), x: norm, y: norm, color: HexColor, tolerance: norm, timeoutMs: Timeout }),
+    z.object({
+      type: z.literal("ifColor"),
+      x: norm,
+      y: norm,
+      color: HexColor,
+      tolerance: norm,
+      then: z.array(StepSchema).max(200),
+      else: z.array(StepSchema).max(200).optional(),
+    }),
+    z.object({
+      type: z.literal("findTap"),
+      template: TemplateSchema,
+      threshold: norm,
+      timeoutMs: Timeout,
+      region: RegionSchema.optional(),
+      offsetX: z.coerce.number().min(-1).max(1).optional(),
+      offsetY: z.coerce.number().min(-1).max(1).optional(),
+    }),
+    z.object({
+      type: z.literal("ifImage"),
+      template: TemplateSchema,
+      threshold: norm,
+      region: RegionSchema.optional(),
+      then: z.array(StepSchema).max(200),
+      else: z.array(StepSchema).max(200).optional(),
+    }),
   ]),
 );
 const ScriptBody = z.object({
@@ -187,6 +224,17 @@ export function registerRoutes(
   });
 
   // ---- automation scripts ----
+
+  /** Full-resolution screenshot for the script editor's coordinate/colour/template
+   * pickers (the device-card thumbnail is deliberately tiny). */
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/screenshot", async (request, reply) => {
+    try {
+      const png = await captureScreenshot(await adbManager.getAdb(request.params.serial));
+      return reply.header("Content-Type", "image/png").header("Cache-Control", "no-store").send(png);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "capture_failed" });
+    }
+  });
 
   app.get<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request) =>
     scriptStore.list(request.params.serial),

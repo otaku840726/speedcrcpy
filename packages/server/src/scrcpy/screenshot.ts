@@ -123,3 +123,16 @@ function encodePng(width: number, height: number, rgb: Uint8Array): Buffer {
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
+
+/**
+ * Full-resolution PNG of the device screen, encoded on the device itself
+ * (`screencap -p`). Used by the script editor's pickers, where the tiny
+ * thumbnail above would be useless.
+ */
+export async function captureScreenshot(adb: Adb): Promise<Buffer> {
+  const shell = adb.subprocess.shellProtocol;
+  if (!shell?.isSupported) throw new Error("shell protocol unavailable");
+  const { stdout, exitCode } = await shell.spawnWait("screencap -p");
+  if (exitCode !== 0 || stdout.byteLength < 8) throw new Error("screencap failed");
+  return Buffer.from(stdout);
+}

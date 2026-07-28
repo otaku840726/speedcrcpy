@@ -1,6 +1,15 @@
-import type { Script, ScriptKey, ScriptLogEntry, ScriptStatus, ScriptStep } from "@speedcrcpy/shared";
+import type {
+  Script,
+  ScriptKey,
+  ScriptLogEntry,
+  ScriptRegion,
+  ScriptStatus,
+  ScriptStep,
+  ScriptTemplate,
+} from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { AdbManager } from "../adb/adb-manager.js";
+import { capture, colorAt, colorMatches, findTemplate, parseHex } from "./vision.js";
 
 const decoder = new TextDecoder();
 
@@ -18,6 +27,13 @@ const KEYCODES: Record<ScriptKey, number> = {
 const MAX_LOG = 200;
 /** Safety net: a "forever" loop still yields, and a runaway script is bounded. */
 const MAX_STEPS_PER_RUN = 100_000;
+/** Gap between vision polls — screencap itself costs ~350ms, so keep this small. */
+const POLL_INTERVAL_MS = 150;
+
+const hex = (c: { r: number; g: number; b: number }): string =>
+  `#${[c.r, c.g, c.b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+
+const templateBytes = (template: ScriptTemplate): Uint8Array => Buffer.from(template.png, "base64");
 
 async function sh(adb: Adb, command: string): Promise<string> {
   const shell = adb.subprocess.shellProtocol;
@@ -38,6 +54,8 @@ interface Run {
   /** Logical display size, resolved once per run — normalized coords map onto it. */
   width: number;
   height: number;
+  /** Template capture sizes already warned about (warn once per run). */
+  scaleWarned: Set<string>;
 }
 
 /**
@@ -100,6 +118,7 @@ export class ScriptEngine {
       log: [],
       width,
       height,
+      scaleWarned: new Set(),
     };
     this.runs.set(serial, run);
     this.finished.delete(serial);
@@ -195,7 +214,73 @@ export class ScriptEngine {
         }
         return;
       }
+      case "waitColor": {
+        const want = parseHex(step.color);
+        const deadline = Date.now() + step.timeoutMs;
+        for (;;) {
+          this.checkStop(run);
+          const frame = await capture(adb);
+          const got = colorAt(frame, step.x, step.y);
+          if (colorMatches(got, want, step.tolerance)) {
+            this.log(run, `等待顏色 ${step.color} 命中 (${hex(got)})`);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            this.log(run, `等待顏色 ${step.color} 逾時(目前 ${hex(got)})`);
+            return;
+          }
+          await this.sleep(POLL_INTERVAL_MS, run);
+        }
+      }
+      case "ifColor": {
+        const frame = await capture(adb);
+        const got = colorAt(frame, step.x, step.y);
+        const hit = colorMatches(got, parseHex(step.color), step.tolerance);
+        this.log(run, `若顏色 ${step.color}:${hit ? "符合" : `不符(${hex(got)})`}`);
+        await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
+        return;
+      }
+      case "findTap": {
+        const deadline = Date.now() + step.timeoutMs;
+        for (;;) {
+          this.checkStop(run);
+          const frame = await capture(adb);
+          this.warnTemplateScale(run, step.template, frame.width, frame.height);
+          const match = await findTemplate(frame, templateBytes(step.template), step.region);
+          if (match.score >= step.threshold) {
+            const nx = match.x + (step.offsetX ?? 0);
+            const ny = match.y + (step.offsetY ?? 0);
+            const [px, py] = this.toPixels(run, nx, ny);
+            await sh(adb, `input tap ${px} ${py}`);
+            this.log(run, `找圖命中 ${(match.score * 100).toFixed(0)}% → 點擊 ${px},${py}`);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            this.log(run, `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`);
+            return;
+          }
+          await this.sleep(POLL_INTERVAL_MS, run);
+        }
+      }
+      case "ifImage": {
+        const frame = await capture(adb);
+        this.warnTemplateScale(run, step.template, frame.width, frame.height);
+        const match = await findTemplate(frame, templateBytes(step.template), step.region);
+        const hit = match.score >= step.threshold;
+        this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)`);
+        await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
+        return;
+      }
     }
+  }
+
+  /** Template matching is not scale-invariant — flag a resolution mismatch once. */
+  private warnTemplateScale(run: Run, template: ScriptTemplate, width: number, height: number): void {
+    if (template.capturedWidth === width && template.capturedHeight === height) return;
+    const key = `${template.capturedWidth}x${template.capturedHeight}`;
+    if (run.scaleWarned.has(key)) return;
+    run.scaleWarned.add(key);
+    this.log(run, `注意:模板擷取於 ${key},目前 ${width}×${height},比對可能失準`);
   }
 
   /** Normalized (0-1) → logical pixels, clamped inside the display. */
