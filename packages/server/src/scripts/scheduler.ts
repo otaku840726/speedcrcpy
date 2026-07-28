@@ -92,11 +92,18 @@ export class Scheduler {
     void this.tick().catch(() => {});
   }
 
-  /** Stop the running script and stop it from being re-scheduled immediately. */
+  /** Stop whatever holds the device and clear what was about to take it. */
   cancel(serial: string): void {
     const state = this.state(serial);
-    const running = this.engine.status(serial).scriptId;
-    if (running) state.activations.delete(running);
+    const status = this.engine.status(serial);
+    // `status.scriptId` is retained after a run finishes, so only treat it as
+    // running when the state says so — otherwise we'd cancel the wrong script.
+    if (status.state !== "idle" && status.scriptId) state.activations.delete(status.scriptId);
+    // Also drop what is merely queued; without this, stopping a queued script
+    // would do nothing and it would start moments later. (A persistent script
+    // re-activates on the next tick by design — disable it to stop it for good.)
+    const desired = this.pick(state);
+    if (desired) state.activations.delete(desired.scriptId);
     this.engine.stop(serial);
   }
 
@@ -107,12 +114,13 @@ export class Scheduler {
   pending(serial: string): { scriptId: string; reason: ScriptPendingReason } | null {
     const state = this.devices.get(serial);
     if (!state) return null;
-    const desired = this.pick(state);
-    if (!desired) return null;
 
     const status = this.engine.status(serial);
     const running = status.state === "idle" ? null : status.scriptId;
-    if (running === desired.scriptId) return null; // it's the one running
+    // The best activation that is NOT the one already running — otherwise a
+    // script queued behind a running one would never be reported.
+    const desired = this.pick(state, running);
+    if (!desired) return null;
 
     if (this.humanActive(serial)) return { scriptId: desired.scriptId, reason: "humanActive" };
     if (running) return { scriptId: desired.scriptId, reason: "outranked" };
@@ -239,10 +247,12 @@ export class Scheduler {
     }
   }
 
-  /** Highest priority wins; ties go to whichever has been waiting longest. */
-  private pick(state: DeviceState): Activation | undefined {
+  /** Highest priority wins; ties go to whichever has been waiting longest.
+   * `exclude` skips a script (used to find what is queued *behind* a run). */
+  private pick(state: DeviceState, exclude?: string | null): Activation | undefined {
     let best: Activation | undefined;
     for (const activation of state.activations.values()) {
+      if (exclude && activation.scriptId === exclude) continue;
       if (!best || activation.priority > best.priority || (activation.priority === best.priority && activation.since < best.since)) {
         best = activation;
       }

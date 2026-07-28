@@ -566,6 +566,9 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   };
 
   const running = status?.state === "running" || status?.state === "stopping";
+  /** Already queued for this device — the run button must not invite a re-click. */
+  const queued = !!status?.pending;
+  const active = running || queued;
   // Stop showing "啟動中" once the server reports it running or explains the wait.
   useEffect(() => {
     if (starting && (running || status?.pending)) setStarting(false);
@@ -592,7 +595,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
         <Icon name="robot" size={18} />
         <span style={{ fontWeight: 600 }}>自動化腳本</span>
         <span style={{ flex: 1 }} />
-        {running ? (
+        {active ? (
           <button
             className="sp-run stop"
             onClick={() => void api(`/api/devices/${encodeURIComponent(serial)}/script/stop`, { method: "POST" })}
