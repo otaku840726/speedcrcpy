@@ -93,6 +93,9 @@ export interface MatchResult {
   /** Centre of the best match, normalized 0-1 (only meaningful when matched). */
   x: number;
   y: number;
+  /** Size of the match (= the template), normalized — lets a UI draw the box. */
+  w: number;
+  h: number;
 }
 
 /** Search region in normalized coords; omit to search the whole frame. */
@@ -163,10 +166,50 @@ export async function findTemplate(frame: Frame, templatePng: Uint8Array, region
   const noMask = new cv.Mat();
   const { maxVal, maxLoc } = cv.minMaxLoc(result, noMask);
   noMask.delete();
-  const centreX = offsetX + maxLoc.x + needle.cols / 2;
-  const centreY = offsetY + maxLoc.y + needle.rows / 2;
+  const needleCols = needle.cols;
+  const needleRows = needle.rows;
+  const centreX = offsetX + maxLoc.x + needleCols / 2;
+  const centreY = offsetY + maxLoc.y + needleRows / 2;
   result.delete();
   cleanup();
 
-  return { score: maxVal, x: centreX / frame.width, y: centreY / frame.height };
+  return {
+    score: maxVal,
+    x: centreX / frame.width,
+    y: centreY / frame.height,
+    w: needleCols / frame.width,
+    h: needleRows / frame.height,
+  };
+}
+
+/**
+ * PNG of a frame (optionally a sub-rect), downscaled to `maxWidth`. Used to send
+ * the *exact* frame a probe ran on to the editor: re-capturing would show a
+ * different moment and the boxes would no longer line up. Coordinates stay
+ * normalized, so downscaling costs nothing but bytes.
+ */
+export function framePng(frame: Frame, maxWidth: number, rect?: { x: number; y: number; w: number; h: number }): Buffer {
+  const sx = rect ? Math.max(0, Math.min(frame.width - 1, Math.round(rect.x))) : 0;
+  const sy = rect ? Math.max(0, Math.min(frame.height - 1, Math.round(rect.y))) : 0;
+  const sw = rect ? Math.max(1, Math.min(frame.width - sx, Math.round(rect.w))) : frame.width;
+  const sh = rect ? Math.max(1, Math.min(frame.height - sy, Math.round(rect.h))) : frame.height;
+
+  const scale = Math.min(1, maxWidth / sw);
+  const tw = Math.max(1, Math.round(sw * scale));
+  const th = Math.max(1, Math.round(sh * scale));
+
+  const png = new PNG({ width: tw, height: th });
+  for (let ty = 0; ty < th; ty++) {
+    const srcY = sy + Math.min(sh - 1, Math.floor((ty * sh) / th));
+    for (let tx = 0; tx < tw; tx++) {
+      const srcX = sx + Math.min(sw - 1, Math.floor((tx * sw) / tw));
+      const s = (srcY * frame.width + srcX) * 4;
+      const d = (ty * tw + tx) * 4;
+      png.data[d] = frame.pixels[s]!;
+      png.data[d + 1] = frame.pixels[s + 1]!;
+      png.data[d + 2] = frame.pixels[s + 2]!;
+      png.data[d + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
 }

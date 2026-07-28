@@ -1204,3 +1204,179 @@ option {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
 }
+
+/* ---- vision step test preview ---- */
+.tp-box {
+  width: min(760px, 100%);
+  gap: 10px;
+}
+.tp-stage {
+  position: relative;
+  line-height: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+.tp-stage img {
+  width: 100%;
+  max-height: 62vh;
+  object-fit: contain;
+  display: block;
+}
+/* Scanned region: bright frame, everything outside dimmed by a huge shadow. */
+.tp-region {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+.tp-box-outline {
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 2px;
+  pointer-events: none;
+}
+.tp-box-outline.hit {
+  border: 2px solid #3ddc84;
+  background: rgba(61, 220, 132, 0.13);
+}
+.tp-box-outline.miss {
+  border: 2px dashed #f0a94b;
+}
+/* The tap point: a crosshair is unambiguous at any preview scale. */
+.tp-cross {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  pointer-events: none;
+}
+.tp-cross::before,
+.tp-cross::after {
+  content: "";
+  position: absolute;
+  background: #3ddc84;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.tp-cross::before {
+  left: 12px;
+  top: 0;
+  width: 2px;
+  height: 26px;
+}
+.tp-cross::after {
+  top: 12px;
+  left: 0;
+  height: 2px;
+  width: 26px;
+}
+.tp-taplab {
+  position: absolute;
+  transform: translate(18px, 8px);
+  font-size: 10px;
+  font-weight: 500;
+  color: #06131f;
+  background: #3ddc84;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  line-height: 1.6;
+  pointer-events: none;
+}
+.tp-foot {
+  font-size: 12px;
+  line-height: 1.7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tp-ok {
+  color: #3ddc84;
+}
+.tp-read {
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+/* Template vs what was actually matched — a score alone can mislead. */
+.tp-cmp {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tp-cmp figure {
+  margin: 0;
+  text-align: center;
+  flex: none;
+}
+.tp-cmp img {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  background: #11151a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: block;
+}
+.tp-cmp img.hit {
+  border-color: #3ddc84;
+}
+.tp-cmp figcaption {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 3px;
+}
+.tp-arrow {
+  color: var(--text-dim);
+}
+.tp-bar {
+  flex: 1;
+  min-width: 0;
+}
+.tp-barline {
+  height: 8px;
+  border-radius: 5px;
+  background: #222932;
+  position: relative;
+  margin-top: 12px;
+}
+.tp-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 5px;
+  background: #f0a94b;
+}
+.tp-fill.hit {
+  background: #3ddc84;
+}
+.tp-thr {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: #f0a94b;
+}
+.tp-score {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+}
+.tp-suggest {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tp-suggest button {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+.tp-warn {
+  color: #f0a94b;
+  font-size: 11px;
+}

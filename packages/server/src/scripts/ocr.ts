@@ -23,6 +23,9 @@ export interface OcrLine {
   /** Match centre in normalized (0-1) device coordinates. */
   x: number;
   y: number;
+  /** Bounding box in normalized device coordinates, so a UI can outline it. */
+  w: number;
+  h: number;
   /** Recognition confidence, 0-1. */
   confidence: number;
 }
@@ -87,6 +90,8 @@ export async function recognize(frame: Frame, region?: Region): Promise<OcrResul
         text: line.text,
         x: cx / frame.width,
         y: cy / frame.height,
+        w: (Math.max(...xs) - Math.min(...xs)) / frame.width,
+        h: (Math.max(...ys) - Math.min(...ys)) / frame.height,
         confidence: line.mean,
       };
     });

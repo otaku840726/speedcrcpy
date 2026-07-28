@@ -11,7 +11,7 @@ import type { Scheduler } from "../scripts/scheduler.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import { recognize } from "../scripts/ocr.js";
-import { capture } from "../scripts/vision.js";
+import { capture, findTemplate, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -99,7 +99,10 @@ const ScriptBody = z.object({
   enabled: z.boolean().default(true),
 });
 
+/** Preview images are only for eyeballing position; coordinates stay normalized. */
+const PREVIEW_WIDTH = 720;
 const OcrProbeBody = z.object({ region: RegionSchema.optional() });
+const MatchProbeBody = z.object({ template: TemplateSchema, region: RegionSchema.optional() });
 
 const DisplayBody = z.object({
   reset: z.boolean().optional(),
@@ -296,9 +299,57 @@ export function registerRoutes(
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
       const frame = await capture(await adbManager.getAdb(request.params.serial));
-      return await recognize(frame, body.data.region);
+      const result = await recognize(frame, body.data.region);
+      return {
+        ...result,
+        frameWidth: frame.width,
+        frameHeight: frame.height,
+        // The exact frame this ran on, so the editor's boxes line up.
+        preview: framePng(frame, PREVIEW_WIDTH).toString("base64"),
+      };
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : "ocr_failed" });
+    }
+  });
+
+  /** Try template matching now: where it matched, how well, and against what. */
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/match", async (request, reply) => {
+    const body = MatchProbeBody.safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    try {
+      const frame = await capture(await adbManager.getAdb(request.params.serial));
+      const started = Date.now();
+      const template = body.data.template;
+      const match = await findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region);
+      const ms = Date.now() - started;
+
+      // Crop what it actually matched, so the author can eyeball whether the
+      // "best match" is the right thing at all — a score alone can mislead.
+      const crop = framePng(frame, 240, {
+        x: (match.x - match.w / 2) * frame.width,
+        y: (match.y - match.h / 2) * frame.height,
+        w: match.w * frame.width,
+        h: match.h * frame.height,
+      }).toString("base64");
+
+      return {
+        ...match,
+        ms,
+        frameWidth: frame.width,
+        frameHeight: frame.height,
+        preview: framePng(frame, PREVIEW_WIDTH).toString("base64"),
+        crop,
+        // Template matching is not scale-invariant; a size change usually breaks it.
+        scaleMismatch:
+          template.capturedWidth > 0 &&
+          (template.capturedWidth !== frame.width || template.capturedHeight !== frame.height)
+            ? { captured: `${template.capturedWidth}×${template.capturedHeight}`, now: `${frame.width}×${frame.height}` }
+            : null,
+        // A little below the observed score, so normal variation still passes.
+        suggestedThreshold: Math.max(0.5, Math.min(0.95, Math.round((match.score - 0.07) * 20) / 20)),
+      };
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "match_failed" });
     }
   });
 

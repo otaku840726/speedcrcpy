@@ -2,6 +2,7 @@ import { PRIORITY_LABELS, type Script, type ScriptKey, type ScriptStatus, type S
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
+import { TestPreview, type TestTarget } from "./TestPreview";
 
 /** Where a step lives in the (nested) tree: child indexes plus which branch. */
 type Path = { index: number; branch?: "body" | "then" | "else" }[];
@@ -95,7 +96,7 @@ interface PickResult {
 function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickMode; onPick: (r: PickResult) => void; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>();
-  const [probeText, setProbeText] = useState<string>();
+  const [test, setTest] = useState<{ target: TestTarget; path: Path }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
@@ -280,7 +281,7 @@ function StepRow({
   onMove: (path: Path, dir: -1 | 1) => void;
   onAdd: (path: Path, branch: "body" | "then" | "else", step: ScriptStep) => void;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
-  probe: (region?: { x: number; y: number; w: number; h: number }) => void;
+  probe: (target: TestTarget, path: Path) => void;
 }) {
   const set = (patch: Partial<ScriptStep>) => onChange(path, { ...step, ...patch } as ScriptStep);
   const num = (v: string) => Number(v) || 0;
@@ -364,6 +365,14 @@ function StepRow({
             )}
           </button>
           相似度 <input className="sp-num" value={Math.round(step.threshold * 100)} onChange={(e) => set({ threshold: num(e.target.value) / 100 })} />%
+          <button
+            className="sp-probe"
+            disabled={!step.template.png}
+            onClick={() => probe({ kind: "match", region: step.region, template: step.template, threshold: step.threshold }, path)}
+            title={step.template.png ? "測試:看比對到哪裡、相似度多少" : "請先框選圖像"}
+          >
+            測試
+          </button>
           {step.type === "findTap" && (
             <>
               逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
@@ -407,7 +416,11 @@ function StepRow({
               onChange={(e) => set({ text: e.target.value })}
               placeholder="要比對的文字(部分即可)"
             />
-            <button className="sp-probe" onClick={() => void probe(step.region)} title="測試辨識:看看 OCR 實際讀到什麼">
+            <button
+              className="sp-probe"
+              onClick={() => probe({ kind: "ocr", region: step.region, text: step.text }, path)}
+              title="測試:看實際讀到什麼、會點在哪裡"
+            >
               測試
             </button>
             {step.type === "tapText" && (
@@ -505,7 +518,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
   const [error, setError] = useState<string>();
-  const [probeText, setProbeText] = useState<string>();
+  const [test, setTest] = useState<{ target: TestTarget; path: Path }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
 
@@ -531,21 +544,6 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       clearInterval(timer);
     };
   }, [serial, starting]);
-
-  /** Run OCR on a region now and show the result — stylised fonts get characters
-   * wrong, so authors should match on whatever actually comes back. */
-  const probe = useCallback(
-    (region?: { x: number; y: number; w: number; h: number }) => {
-      setProbeText("辨識中…");
-      api<{ text: string; ms: number }>(`/api/devices/${encodeURIComponent(serial)}/ocr`, {
-        method: "POST",
-        body: JSON.stringify({ region }),
-      })
-        .then((r) => setProbeText(`辨識結果(${r.ms}ms):${r.text || "(沒讀到文字)"}`))
-        .catch((e: unknown) => setProbeText(`辨識失敗:${e instanceof Error ? e.message : ""}`));
-    },
-    [serial],
-  );
 
   const editSteps = (fn: (steps: ScriptStep[]) => ScriptStep[]) =>
     setDraft((d) => (d ? { ...d, steps: fn(d.steps) } : d));
@@ -707,17 +705,12 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
                 onAdd={(p, branch, step) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(step)))}
                 pick={(mode, apply) => setPicker({ mode, apply })}
-                probe={probe}
+                probe={(target, path) => setTest({ target, path })}
               />
             ))}
             <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} />
           </div>
 
-          {probeText && (
-            <div className="sp-probe-out" onClick={() => setProbeText(undefined)} title="點擊關閉">
-              {probeText}
-            </div>
-          )}
         </>
       )}
 
@@ -732,6 +725,24 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
             </div>
           ))}
         </div>
+      )}
+
+      {test && (
+        <TestPreview
+          serial={serial}
+          target={test.target}
+          onClose={() => setTest(undefined)}
+          onSuggestThreshold={
+            test.target.kind === "match"
+              ? (value) => {
+                  editSteps((s) => editList(s, test.path, (list, i) =>
+                    list.map((step, j) => (j === i ? ({ ...step, threshold: value } as ScriptStep) : step)),
+                  ));
+                  setTest(undefined);
+                }
+              : undefined
+          }
+        />
       )}
 
       {picker && (
