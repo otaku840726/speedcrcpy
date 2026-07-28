@@ -19,6 +19,9 @@ const KEY_LABELS: Record<string, string> = {
 const NEW_STEPS: { label: string; make: () => ScriptStep; key: boolean }[] = [
   { label: "找圖點擊", key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
   { label: "若找到圖", key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
+  { label: "依文字點擊", key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
+  { label: "若文字含", key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
+  { label: "讀取數值", key: true, make: () => ({ type: "ifNumber", compare: ">", value: 0, then: [], else: [] }) },
   { label: "點擊", key: false, make: () => ({ type: "tap", x: 0.5, y: 0.5 }) },
   { label: "滑動", key: false, make: () => ({ type: "swipe", x1: 0.5, y1: 0.7, x2: 0.5, y2: 0.3, durationMs: 300 }) },
   { label: "等待", key: false, make: () => ({ type: "wait", minMs: 500, maxMs: 500 }) },
@@ -76,7 +79,7 @@ const moveAt = (dir: -1 | 1) => (list: ScriptStep[], i: number) => {
 
 // ---- picker ----
 
-type PickMode = "point" | "swipe" | "template";
+type PickMode = "point" | "swipe" | "template" | "region";
 interface PickResult {
   x: number;
   y: number;
@@ -84,6 +87,7 @@ interface PickResult {
   x2?: number;
   y2?: number;
   template?: ScriptTemplate;
+  region?: { x: number; y: number; w: number; h: number };
 }
 
 /** Screenshot overlay: click a point (colour is sampled), drag a swipe, or
@@ -91,6 +95,7 @@ interface PickResult {
 function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickMode; onPick: (r: PickResult) => void; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>();
+  const [probeText, setProbeText] = useState<string>();
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
@@ -164,9 +169,17 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
       onClose();
       return;
     }
-    // template: crop the marquee out of the screenshot
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (mode === "region") {
+      const rx = Math.min(drag.x1, drag.x2), ry = Math.min(drag.y1, drag.y2);
+      const rw = Math.abs(drag.x2 - drag.x1), rh = Math.abs(drag.y2 - drag.y1);
+      if (rw < 0.01 || rh < 0.01) { setDrag(null); return; }
+      onPick({ x: rx + rw / 2, y: ry + rh / 2, color: colorAt(rx, ry), region: { x: rx, y: ry, w: rw, h: rh } });
+      onClose();
+      return;
+    }
+    // template: crop the marquee out of the screenshot
     const x = Math.round(Math.min(drag.x1, drag.x2) * canvas.width);
     const y = Math.round(Math.min(drag.y1, drag.y2) * canvas.height);
     const w = Math.round(Math.abs(drag.x2 - drag.x1) * canvas.width);
@@ -193,7 +206,13 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
   };
 
   const hint =
-    mode === "point" ? "點一下畫面取座標與顏色" : mode === "swipe" ? "從起點拖曳到終點" : "框選要比對的圖像";
+    mode === "point"
+      ? "點一下畫面取座標與顏色"
+      : mode === "swipe"
+        ? "從起點拖曳到終點"
+        : mode === "region"
+          ? "框選辨識範圍(範圍越小越快越準)"
+          : "框選要比對的圖像";
 
   return (
     <div className="picker-backdrop" onClick={onClose}>
@@ -250,6 +269,7 @@ function StepRow({
   onMove,
   onAdd,
   pick,
+  probe,
 }: {
   step: ScriptStep;
   path: Path;
@@ -258,6 +278,7 @@ function StepRow({
   onMove: (path: Path, dir: -1 | 1) => void;
   onAdd: (path: Path, branch: "body" | "then" | "else", step: ScriptStep) => void;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
+  probe: (region?: { x: number; y: number; w: number; h: number }) => void;
 }) {
   const set = (patch: Partial<ScriptStep>) => onChange(path, { ...step, ...patch } as ScriptStep);
   const num = (v: string) => Number(v) || 0;
@@ -349,6 +370,53 @@ function StepRow({
         </>
       );
       break;
+    case "tapText":
+    case "ifText":
+    case "ifNumber": {
+      const regionChip = (
+        <button
+          className={`sp-pick${step.region ? "" : " warn"}`}
+          onClick={() => pick("region", (r) => r.region && set({ region: r.region }))}
+          title={step.region ? "重新框選辨識範圍" : "未框選範圍:整張畫面(慢約 30 倍,座標較粗略)"}
+        >
+          <Icon name="crosshair" size={13} />
+          {step.region
+            ? `${(step.region.w * 100).toFixed(0)}×${(step.region.h * 100).toFixed(0)}%`
+            : "整張(慢)"}
+        </button>
+      );
+      body =
+        step.type === "ifNumber" ? (
+          <>
+            讀取數值 {regionChip}
+            <select value={step.compare} onChange={(e) => set({ compare: e.target.value as typeof step.compare })}>
+              {[">", ">=", "<", "<=", "=="].map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <input className="sp-num" value={step.value} onChange={(e) => set({ value: num(e.target.value) })} />
+          </>
+        ) : (
+          <>
+            {step.type === "tapText" ? "依文字點擊" : "若文字含"} {regionChip}
+            <input
+              className="sp-text"
+              value={step.text}
+              onChange={(e) => set({ text: e.target.value })}
+              placeholder="要比對的文字(部分即可)"
+            />
+            <button className="sp-probe" onClick={() => void probe(step.region)} title="測試辨識:看看 OCR 實際讀到什麼">
+              測試
+            </button>
+            {step.type === "tapText" && (
+              <>
+                逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
+              </>
+            )}
+          </>
+        );
+      break;
+    }
     case "loop":
       body = (
         <>
@@ -360,7 +428,11 @@ function StepRow({
   }
 
   const branches: ("body" | "then" | "else")[] =
-    step.type === "loop" ? ["body"] : step.type === "ifColor" || step.type === "ifImage" ? ["then", "else"] : [];
+    step.type === "loop"
+      ? ["body"]
+      : step.type === "ifColor" || step.type === "ifImage" || step.type === "ifText" || step.type === "ifNumber"
+        ? ["then", "else"]
+        : [];
 
   return (
     <div className={`sp-step${branches.length ? " sp-block" : ""}`}>
@@ -385,6 +457,7 @@ function StepRow({
               onMove={onMove}
               onAdd={onAdd}
               pick={pick}
+              probe={probe}
             />
           ))}
           <AddMenu onAdd={(s) => onAdd(path, branch, s)} />
@@ -430,6 +503,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
   const [error, setError] = useState<string>();
+  const [probeText, setProbeText] = useState<string>();
 
   const reload = useCallback(async () => {
     setScripts(await api<Script[]>(`/api/devices/${encodeURIComponent(serial)}/scripts`).catch(() => []));
@@ -453,6 +527,21 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       clearInterval(timer);
     };
   }, [serial]);
+
+  /** Run OCR on a region now and show the result — stylised fonts get characters
+   * wrong, so authors should match on whatever actually comes back. */
+  const probe = useCallback(
+    (region?: { x: number; y: number; w: number; h: number }) => {
+      setProbeText("辨識中…");
+      api<{ text: string; ms: number }>(`/api/devices/${encodeURIComponent(serial)}/ocr`, {
+        method: "POST",
+        body: JSON.stringify({ region }),
+      })
+        .then((r) => setProbeText(`辨識結果(${r.ms}ms):${r.text || "(沒讀到文字)"}`))
+        .catch((e: unknown) => setProbeText(`辨識失敗:${e instanceof Error ? e.message : ""}`));
+    },
+    [serial],
+  );
 
   const editSteps = (fn: (steps: ScriptStep[]) => ScriptStep[]) =>
     setDraft((d) => (d ? { ...d, steps: fn(d.steps) } : d));
@@ -584,10 +673,17 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
                 onAdd={(p, branch, step) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(step)))}
                 pick={(mode, apply) => setPicker({ mode, apply })}
+                probe={probe}
               />
             ))}
             <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} />
           </div>
+
+          {probeText && (
+            <div className="sp-probe-out" onClick={() => setProbeText(undefined)} title="點擊關閉">
+              {probeText}
+            </div>
+          )}
         </>
       )}
 

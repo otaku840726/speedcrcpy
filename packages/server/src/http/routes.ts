@@ -10,6 +10,8 @@ import type { ScriptEngine } from "../scripts/engine.js";
 import type { Scheduler } from "../scripts/scheduler.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
+import { recognize } from "../scripts/ocr.js";
+import { capture } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -57,6 +59,22 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       offsetX: z.coerce.number().min(-1).max(1).optional(),
       offsetY: z.coerce.number().min(-1).max(1).optional(),
     }),
+    z.object({ type: z.literal("tapText"), text: z.string().min(1).max(100), region: RegionSchema.optional(), timeoutMs: Timeout }),
+    z.object({
+      type: z.literal("ifText"),
+      text: z.string().min(1).max(100),
+      region: RegionSchema.optional(),
+      then: z.array(StepSchema).max(200),
+      else: z.array(StepSchema).max(200).optional(),
+    }),
+    z.object({
+      type: z.literal("ifNumber"),
+      region: RegionSchema.optional(),
+      compare: z.enum([">", ">=", "<", "<=", "=="]),
+      value: z.coerce.number(),
+      then: z.array(StepSchema).max(200),
+      else: z.array(StepSchema).max(200).optional(),
+    }),
     z.object({
       type: z.literal("ifImage"),
       template: TemplateSchema,
@@ -80,6 +98,8 @@ const ScriptBody = z.object({
   priority: z.coerce.number().int().min(0).max(100).default(20),
   enabled: z.boolean().default(true),
 });
+
+const OcrProbeBody = z.object({ region: RegionSchema.optional() });
 
 const DisplayBody = z.object({
   reset: z.boolean().optional(),
@@ -268,6 +288,19 @@ export function registerRoutes(
   });
 
   app.get("/api/schedule", async () => scheduler.overview());
+
+  /** Try OCR on a region now, so the editor can show what the engine will read
+   * (stylised fonts get characters wrong, so authors match on what comes back). */
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/ocr", async (request, reply) => {
+    const body = OcrProbeBody.safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    try {
+      const frame = await capture(await adbManager.getAdb(request.params.serial));
+      return await recognize(frame, body.data.region);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "ocr_failed" });
+    }
+  });
 
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/script/stop", async (request) => {
     scheduler.cancel(request.params.serial);

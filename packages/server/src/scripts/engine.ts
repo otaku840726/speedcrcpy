@@ -9,6 +9,7 @@ import type {
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { AdbManager } from "../adb/adb-manager.js";
+import { parseNumber, recognize, textMatches } from "./ocr.js";
 import { capture, colorAt, colorMatches, findTemplate, parseHex } from "./vision.js";
 
 const decoder = new TextDecoder();
@@ -109,7 +110,7 @@ export class ScriptEngine {
     if (this.runs.has(serial)) throw new Error("script already running on this device");
 
     const adb = await this.adbManager.getAdb(serial);
-    const { width, height } = await this.logicalSize(adb);
+    const { width, height } = await this.frameSize(adb);
     const run: Run = {
       script,
       startedAt: Date.now(),
@@ -166,6 +167,15 @@ export class ScriptEngine {
     }
   }
 
+  /** Vision steps already hold a frame — resync the mapping so a rotation
+   * that happens mid-run is picked up immediately. */
+  private syncSize(run: Run, frame: { width: number; height: number }): void {
+    if (run.width === frame.width && run.height === frame.height) return;
+    run.width = frame.width;
+    run.height = frame.height;
+    this.log(run, `畫面尺寸變更 → ${frame.width}×${frame.height}`);
+  }
+
   private async runStep(adb: Adb, run: Run, step: ScriptStep): Promise<void> {
     if (++run.stepsRun > MAX_STEPS_PER_RUN) throw new Error("超過步驟上限,已中止");
 
@@ -220,6 +230,7 @@ export class ScriptEngine {
         for (;;) {
           this.checkStop(run);
           const frame = await capture(adb);
+          this.syncSize(run, frame);
           const got = colorAt(frame, step.x, step.y);
           if (colorMatches(got, want, step.tolerance)) {
             this.log(run, `等待顏色 ${step.color} 命中 (${hex(got)})`);
@@ -234,6 +245,7 @@ export class ScriptEngine {
       }
       case "ifColor": {
         const frame = await capture(adb);
+        this.syncSize(run, frame);
         const got = colorAt(frame, step.x, step.y);
         const hit = colorMatches(got, parseHex(step.color), step.tolerance);
         this.log(run, `若顏色 ${step.color}:${hit ? "符合" : `不符(${hex(got)})`}`);
@@ -245,6 +257,7 @@ export class ScriptEngine {
         for (;;) {
           this.checkStop(run);
           const frame = await capture(adb);
+          this.syncSize(run, frame);
           this.warnTemplateScale(run, step.template, frame.width, frame.height);
           const match = await findTemplate(frame, templateBytes(step.template), step.region);
           if (match.score >= step.threshold) {
@@ -264,10 +277,53 @@ export class ScriptEngine {
       }
       case "ifImage": {
         const frame = await capture(adb);
+        this.syncSize(run, frame);
         this.warnTemplateScale(run, step.template, frame.width, frame.height);
         const match = await findTemplate(frame, templateBytes(step.template), step.region);
         const hit = match.score >= step.threshold;
         this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)`);
+        await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
+        return;
+      }
+      case "tapText": {
+        const deadline = Date.now() + step.timeoutMs;
+        for (;;) {
+          this.checkStop(run);
+          const frame = await capture(adb);
+          this.syncSize(run, frame);
+          const result = await recognize(frame, step.region);
+          const line = result.lines.find((l) => textMatches(l.text, step.text));
+          if (line) {
+            const [px, py] = this.toPixels(run, line.x, line.y);
+            await sh(adb, `input tap ${px} ${py}`);
+            this.log(run, `找到文字「${line.text}」→ 點擊 ${px},${py} (${result.ms}ms)`);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            this.log(run, `找不到文字「${step.text}」逾時(讀到:${result.text.slice(0, 40) || "(空)"})`);
+            return;
+          }
+          await this.sleep(POLL_INTERVAL_MS, run);
+        }
+      }
+      case "ifText": {
+        const result = await recognize(await capture(adb), step.region);
+        const hit = textMatches(result.text, step.text);
+        this.log(run, `若文字含「${step.text}」:${hit ? "是" : `否(讀到:${result.text.slice(0, 30) || "空"})`}`);
+        await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
+        return;
+      }
+      case "ifNumber": {
+        const result = await recognize(await capture(adb), step.region);
+        const value = parseNumber(result.text);
+        const hit =
+          value !== null &&
+          ((step.compare === ">" && value > step.value) ||
+            (step.compare === ">=" && value >= step.value) ||
+            (step.compare === "<" && value < step.value) ||
+            (step.compare === "<=" && value <= step.value) ||
+            (step.compare === "==" && value === step.value));
+        this.log(run, `讀取數值:${value ?? "(讀不到)"} ${step.compare} ${step.value} → ${hit ? "成立" : "不成立"}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
       }
@@ -290,14 +346,18 @@ export class ScriptEngine {
     return [px, py];
   }
 
-  /** Logical size = what screencap returns and what `input` maps onto. */
-  private async logicalSize(adb: Adb): Promise<{ width: number; height: number }> {
-    const out = await sh(adb, "wm size");
-    const override = out.match(/Override size:\s*(\d+)x(\d+)/);
-    const physical = out.match(/Physical size:\s*(\d+)x(\d+)/);
-    const m = override ?? physical;
-    if (!m) throw new Error("could not read wm size");
-    return { width: Number(m[1]), height: Number(m[2]) };
+  /**
+   * Coordinate space = the screencap frame, NOT `wm size`.
+   *
+   * Every coordinate in a script originates from a screencap (the editor's
+   * pickers work on one, and vision steps derive matches from one), and
+   * `input` maps onto the same rotated space. `wm size` reports the *unrotated*
+   * logical size — on a landscape device it says 1080x1920 while screencap
+   * returns 1920x1080, which would send every tap to the wrong place.
+   */
+  private async frameSize(adb: Adb): Promise<{ width: number; height: number }> {
+    const frame = await capture(adb);
+    return { width: frame.width, height: frame.height };
   }
 
   private checkStop(run: Run): void {

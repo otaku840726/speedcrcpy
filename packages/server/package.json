@@ -13,6 +13,7 @@
     "@fails-components/webtransport-transport-http3-quiche": "1.6.7",
     "@fastify/cookie": "^11.0.0",
     "@fastify/static": "^8.0.0",
+    "@gutenye/ocr-node": "^1.4.8",
     "@peculiar/x509": "^2.0.0",
     "@speedcrcpy/shared": "workspace:*",
     "@techstark/opencv-js": "5.0.0-release.1",

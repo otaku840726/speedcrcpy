@@ -67,6 +67,25 @@ export type ScriptStep =
       region?: ScriptRegion;
       then: ScriptStep[];
       else?: ScriptStep[];
+    }
+  /**
+   * Recognise text and tap what matched. Matching is substring-based
+   * (whitespace-insensitive) because OCR drops or alters the odd character on
+   * stylised game fonts — search for a distinctive fragment, not the full label.
+   * A region is strongly recommended: whole-screen OCR is ~30x slower and its
+   * boxes span the whole line, which makes the tap point useless.
+   */
+  | { type: "tapText"; text: string; region?: ScriptRegion; timeoutMs: number }
+  /** Branch on whether recognised text contains `text`. */
+  | { type: "ifText"; text: string; region?: ScriptRegion; then: ScriptStep[]; else?: ScriptStep[] }
+  /** Read the first number in the region and compare it. */
+  | {
+      type: "ifNumber";
+      region?: ScriptRegion;
+      compare: ">" | ">=" | "<" | "<=" | "==";
+      value: number;
+      then: ScriptStep[];
+      else?: ScriptStep[];
     };
 
 /**
