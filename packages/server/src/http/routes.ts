@@ -317,7 +317,11 @@ export function registerRoutes(
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request, reply) => {
     const body = ScriptBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    return scriptStore.save({ ...body.data, deviceSerial: request.params.serial } as never);
+    const saved = scriptStore.save({ ...body.data, deviceSerial: request.params.serial } as never);
+    // Editing a script is a fresh intent — in particular, re-enabling one that
+    // was stopped should let it be scheduled again.
+    scheduler.resume(saved.id, request.params.serial);
+    return saved;
   });
 
   app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (request, reply) =>

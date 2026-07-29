@@ -20,6 +20,15 @@ interface Activation {
 
 interface DeviceState {
   activations: Map<string, Activation>;
+  /**
+   * Scripts the user stopped by hand, held off until they ask for them again.
+   *
+   * Without this, `停止` on a persistent script lasts about three seconds: the
+   * next tick re-activates it because it is still enabled, and it starts over
+   * with the log cheerfully reading 已停止. Runtime state on purpose — stopping
+   * a script for now should not rewrite what the script is configured to do.
+   */
+  suppressed: Set<string>;
   lastHumanInputAt: number;
   /** Script the engine was last seen running, to detect completion. */
   lastRunning: string | null;
@@ -83,6 +92,7 @@ export class Scheduler {
   /** Queue a script to run now, outranking scheduled/persistent work. */
   requestRun(script: Script): void {
     const state = this.state(script.deviceSerial);
+    state.suppressed.delete(script.id); // asking for it is how a stop is undone
     state.activations.set(script.id, {
       scriptId: script.id,
       priority: script.priority + MANUAL_BOOST,
@@ -92,19 +102,26 @@ export class Scheduler {
     void this.tick().catch(() => {});
   }
 
-  /** Stop whatever holds the device and clear what was about to take it. */
+  /**
+   * Stop whatever holds the device, clear what was about to take it, and keep
+   * all of it off until asked again.
+   *
+   * Everything currently wanting the device is suppressed, not just the one
+   * that happens to be running — otherwise stopping a script only hands the
+   * device to the next one in the queue, which is not what the button says. A
+   * daily script whose time has not come yet is untouched, since it has no
+   * activation to suppress.
+   */
   cancel(serial: string): void {
     const state = this.state(serial);
-    const status = this.engine.status(serial);
-    // `status.scriptId` is retained after a run finishes, so only treat it as
-    // running when the state says so — otherwise we'd cancel the wrong script.
-    if (status.state !== "idle" && status.scriptId) state.activations.delete(status.scriptId);
-    // Also drop what is merely queued; without this, stopping a queued script
-    // would do nothing and it would start moments later. (A persistent script
-    // re-activates on the next tick by design — disable it to stop it for good.)
-    const desired = this.pick(state);
-    if (desired) state.activations.delete(desired.scriptId);
+    for (const scriptId of state.activations.keys()) state.suppressed.add(scriptId);
+    state.activations.clear();
     this.engine.stop(serial);
+  }
+
+  /** Let a stopped script be scheduled again — used when it is re-enabled. */
+  resume(scriptId: string, serial: string): void {
+    this.state(serial).suppressed.delete(scriptId);
   }
 
   /**
@@ -160,7 +177,7 @@ export class Scheduler {
   private state(serial: string): DeviceState {
     let state = this.devices.get(serial);
     if (!state) {
-      state = { activations: new Map(), lastHumanInputAt: 0, lastRunning: null, restartAfter: 0 };
+      state = { activations: new Map(), suppressed: new Set(), lastHumanInputAt: 0, lastRunning: null, restartAfter: 0 };
       this.devices.set(serial, state);
     }
     return state;
@@ -232,7 +249,9 @@ export class Scheduler {
       }
       const state = this.state(script.deviceSerial);
       if (script.trigger.type === "persistent") {
-        if (!state.activations.has(script.id)) {
+        // A stopped persistent script stays stopped; `firedDays` already keeps
+        // a daily one from re-firing, so only this branch needs the check.
+        if (!state.activations.has(script.id) && !state.suppressed.has(script.id)) {
           state.activations.set(script.id, { scriptId: script.id, priority: script.priority, oneShot: false, since: Date.now() });
         }
       } else if (script.trigger.type === "daily") {
