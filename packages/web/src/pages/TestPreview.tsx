@@ -131,7 +131,10 @@ export function TestPreview({
     () =>
       target.kind === "ocr"
         ? (ocr?.matches ?? []).map((m) => ({ ...m, label: m.text }))
-        : (match?.matches ?? []).map((m) => ({ ...m, label: pct(m.score) })),
+        : (match?.matches ?? []).map((m) => ({
+            ...m,
+            label: `${Math.round(m.x * (match?.frameWidth ?? 1))},${Math.round(m.y * (match?.frameHeight ?? 1))}`,
+          })),
     [ocr, match, target.kind],
   );
   const selection = useMemo(() => scriptSelect(candidates, wanted, filter, pick), [candidates, wanted, filter, pick]);

@@ -1209,6 +1209,20 @@ option {
 .tp-box {
   width: min(760px, 100%);
   gap: 10px;
+  /* The stage refuses to shrink (it has to match the image pixel for pixel —
+     see .tp-stage), so a tall frame plus the settings and the candidate list
+     can exceed the viewport. Scroll the panel rather than let it spill off the
+     bottom where the close button becomes unreachable. */
+  max-height: 92vh;
+  overflow-y: auto;
+}
+.tp-box .picker-head {
+  position: sticky;
+  top: -10px;
+  z-index: 2;
+  background: var(--panel);
+  margin-top: -10px;
+  padding: 10px 0 8px;
 }
 /* The stage must hug the image exactly: overlays are positioned in % of this
    box, so any letterboxing (object-fit: contain) would shift every box and the
@@ -1232,7 +1246,9 @@ option {
 .tp-stage img {
   display: block;
   max-width: 100%;
-  max-height: 62vh;
+  /* Low enough that the picture and the first settings group share a screen on
+     a narrow panel, where they stack instead of sitting side by side. */
+  max-height: 50vh;
   width: auto;
   height: auto;
 }
@@ -1494,6 +1510,9 @@ option {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* The score bar needs real width to be readable; on a narrow panel let it
+     drop below the two thumbnails rather than squeeze all three together. */
+  flex-wrap: wrap;
 }
 .tp-cmp figure {
   margin: 0;
@@ -1521,7 +1540,7 @@ option {
   color: var(--text-dim);
 }
 .tp-bar {
-  flex: 1;
+  flex: 1 1 220px;
   min-width: 0;
 }
 .tp-barline {
@@ -1551,9 +1570,18 @@ option {
 }
 .tp-score {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   margin-top: 7px;
+  flex-wrap: wrap;
+}
+/* "套用建議 95%" must never break across two lines. */
+.tp-score button {
+  flex: none;
+  white-space: nowrap;
+  padding: 4px 10px;
+  font-size: 12px;
 }
 .tp-suggest {
   display: flex;
