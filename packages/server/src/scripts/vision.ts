@@ -50,7 +50,18 @@ async function loadCv(): Promise<typeof import("@techstark/opencv-js")> {
 export async function capture(adb: Adb): Promise<Frame> {
   const shell = adb.subprocess.shellProtocol;
   if (!shell?.isSupported) throw new Error("shell protocol unavailable");
-  const { stdout, exitCode } = await shell.spawnWait("screencap");
+  // Tango reports a dropped adb stream as a struct-deserialization failure
+  // ("the underlying readable was ended before the struct was fully
+  // deserialized"), which tells a script author nothing at all. From here that
+  // is simply the device going away mid-transfer — screencap moves ~8 MB, so it
+  // is the step most likely to be caught by a blip.
+  let stdout: Uint8Array;
+  let exitCode: number;
+  try {
+    ({ stdout, exitCode } = await shell.spawnWait("screencap"));
+  } catch (error) {
+    throw new Error(`擷取畫面時與裝置的連線中斷(${error instanceof Error ? error.message : String(error)})`);
+  }
   if (exitCode !== 0 || stdout.byteLength < 16) throw new Error("screencap failed");
 
   const view = new DataView(stdout.buffer, stdout.byteOffset, stdout.byteLength);

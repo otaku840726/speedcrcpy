@@ -18,6 +18,7 @@ import type { AdbManager } from "../adb/adb-manager.js";
 import { parseNumber, textMatches } from "./ocr.js";
 import { findTemplate, recognize } from "./vision-offload.js";
 import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
+import type { Frame } from "./vision.js";
 
 const decoder = new TextDecoder();
 
@@ -46,8 +47,14 @@ const templateBytes = (template: ScriptTemplate): Uint8Array => Buffer.from(temp
 async function sh(adb: Adb, command: string): Promise<string> {
   const shell = adb.subprocess.shellProtocol;
   if (!shell?.isSupported) throw new Error("shell protocol unavailable");
-  const { stdout } = await shell.spawnWait(command);
-  return decoder.decode(stdout);
+  try {
+    const { stdout } = await shell.spawnWait(command);
+    return decoder.decode(stdout);
+  } catch (error) {
+    // Same as in `capture`: a dropped adb stream surfaces as an opaque struct
+    // error, so say what actually happened.
+    throw new Error(`與裝置的連線中斷(${command.split(" ")[0]}:${error instanceof Error ? error.message : String(error)})`);
+  }
 }
 
 /** Stop signal thrown to unwind out of nested loops when a run is cancelled. */
@@ -64,6 +71,8 @@ interface Run {
   height: number;
   /** Template capture sizes already warned about (warn once per run). */
   scaleWarned: Set<string>;
+  /** A failed capture is logged once, not once per poll. */
+  captureWarned: boolean;
 }
 
 /**
@@ -134,6 +143,7 @@ export class ScriptEngine {
       width,
       height,
       scaleWarned: new Set(),
+      captureWarned: false,
     };
     this.runs.set(serial, run);
     this.finished.delete(serial);
@@ -204,6 +214,27 @@ export class ScriptEngine {
     return `讀到:${read.slice(0, 40) || "(空)"}`;
   }
 
+  /**
+   * A frame for a polling step, or undefined when the capture failed.
+   *
+   * A step that already polls to a deadline should treat a dropped frame as one
+   * unsuccessful attempt, not as a reason to abandon the run: adb over the
+   * network blips, and screencap moves ~8 MB per attempt so it is the most
+   * likely thing to be caught by one. Logged once per run — a device that is
+   * really gone would otherwise fill the log with the same line.
+   */
+  private async pollFrame(run: Run, adb: Adb): Promise<Frame | undefined> {
+    try {
+      return await capture(adb);
+    } catch (error) {
+      if (!run.captureWarned) {
+        run.captureWarned = true;
+        this.log(run, `擷取畫面失敗,重試中:${error instanceof Error ? error.message : String(error)}`);
+      }
+      return undefined;
+    }
+  }
+
   /** Vision steps already hold a frame — resync the mapping so a rotation
    * that happens mid-run is picked up immediately. */
   private syncSize(run: Run, frame: { width: number; height: number }): void {
@@ -266,15 +297,20 @@ export class ScriptEngine {
         const deadline = Date.now() + step.timeoutMs;
         for (;;) {
           this.checkStop(run);
-          const frame = await capture(adb);
-          this.syncSize(run, frame);
-          const got = colorAt(frame, step.x, step.y);
-          if (colorMatches(got, want, step.tolerance)) {
-            this.log(run, `等待顏色 ${step.color} 命中 (${hex(got)})`);
-            return;
-          }
-          if (Date.now() >= deadline) {
-            this.log(run, `等待顏色 ${step.color} 逾時(目前 ${hex(got)})`);
+          const frame = await this.pollFrame(run, adb);
+          if (frame) {
+            this.syncSize(run, frame);
+            const got = colorAt(frame, step.x, step.y);
+            if (colorMatches(got, want, step.tolerance)) {
+              this.log(run, `等待顏色 ${step.color} 命中 (${hex(got)})`);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              this.log(run, `等待顏色 ${step.color} 逾時(目前 ${hex(got)})`);
+              return;
+            }
+          } else if (Date.now() >= deadline) {
+            this.log(run, `等待顏色 ${step.color} 逾時:期間都擷取不到畫面`);
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
@@ -293,26 +329,31 @@ export class ScriptEngine {
         const deadline = Date.now() + step.timeoutMs;
         for (;;) {
           this.checkStop(run);
-          const frame = await capture(adb);
-          this.syncSize(run, frame);
-          this.warnTemplateScale(run, step.template, frame.width, frame.height);
-          const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
-          const sel = scriptSelect(match.matches, undefined, step.filter, step.pick, frame);
-          if (sel.chosen) {
-            const nx = sel.chosen.x + (step.offsetX ?? 0);
-            const ny = sel.chosen.y + (step.offsetY ?? 0);
-            const [px, py] = this.toPixels(run, nx, ny);
-            await sh(adb, `input tap ${px} ${py}`);
-            this.log(run, `找圖命中 ${this.nth(sel, step.pick)} ${(sel.chosen.confidence * 100).toFixed(0)}% → 點擊 ${px},${py}`);
-            return;
-          }
-          if (Date.now() >= deadline) {
-            this.log(
-              run,
-              match.matches.length
-                ? `找圖逾時 · ${this.why(sel, "")}`
-                : `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`,
-            );
+          const frame = await this.pollFrame(run, adb);
+          if (frame) {
+            this.syncSize(run, frame);
+            this.warnTemplateScale(run, step.template, frame.width, frame.height);
+            const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
+            const sel = scriptSelect(match.matches, undefined, step.filter, step.pick, frame);
+            if (sel.chosen) {
+              const nx = sel.chosen.x + (step.offsetX ?? 0);
+              const ny = sel.chosen.y + (step.offsetY ?? 0);
+              const [px, py] = this.toPixels(run, nx, ny);
+              await sh(adb, `input tap ${px} ${py}`);
+              this.log(run, `找圖命中 ${this.nth(sel, step.pick)} ${(sel.chosen.confidence * 100).toFixed(0)}% → 點擊 ${px},${py}`);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              this.log(
+                run,
+                match.matches.length
+                  ? `找圖逾時 · ${this.why(sel, "")}`
+                  : `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`,
+              );
+              return;
+            }
+          } else if (Date.now() >= deadline) {
+            this.log(run, "找圖逾時:期間都擷取不到畫面");
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
@@ -332,21 +373,26 @@ export class ScriptEngine {
         const deadline = Date.now() + step.timeoutMs;
         for (;;) {
           this.checkStop(run);
-          const frame = await capture(adb);
-          this.syncSize(run, frame);
-          // Matches are the words themselves, narrowed down from the band they
-          // sit in — OCR merges a whole horizontal row (icon and all) into one
-          // box, so its centre is rarely on the text you asked for.
-          const result = await recognize(frame, step.region, step.text);
-          const pick = scriptSelect(result.matches, step.text, step.filter, step.pick, frame);
-          if (pick.chosen) {
-            const [px, py] = this.toPixels(run, pick.chosen.x + (step.offsetX ?? 0), pick.chosen.y + (step.offsetY ?? 0));
-            await sh(adb, `input tap ${px} ${py}`);
-            this.log(run, `找到文字「${pick.chosen.text}」${this.nth(pick, step.pick)} → 點擊 ${px},${py} (${result.ms}ms)`);
-            return;
-          }
-          if (Date.now() >= deadline) {
-            this.log(run, `找不到文字「${step.text}」逾時 · ${this.why(pick, result.text)}`);
+          const frame = await this.pollFrame(run, adb);
+          if (frame) {
+            this.syncSize(run, frame);
+            // Matches are the words themselves, narrowed down from the band they
+            // sit in — OCR merges a whole horizontal row (icon and all) into one
+            // box, so its centre is rarely on the text you asked for.
+            const result = await recognize(frame, step.region, step.text);
+            const pick = scriptSelect(result.matches, step.text, step.filter, step.pick, frame);
+            if (pick.chosen) {
+              const [px, py] = this.toPixels(run, pick.chosen.x + (step.offsetX ?? 0), pick.chosen.y + (step.offsetY ?? 0));
+              await sh(adb, `input tap ${px} ${py}`);
+              this.log(run, `找到文字「${pick.chosen.text}」${this.nth(pick, step.pick)} → 點擊 ${px},${py} (${result.ms}ms)`);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              this.log(run, `找不到文字「${step.text}」逾時 · ${this.why(pick, result.text)}`);
+              return;
+            }
+          } else if (Date.now() >= deadline) {
+            this.log(run, `找不到文字「${step.text}」逾時:期間都擷取不到畫面`);
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
