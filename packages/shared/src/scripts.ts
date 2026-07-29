@@ -88,6 +88,15 @@ export type ScriptStep =
       /** Which candidates count, and which of them to tap. */
       filter?: ScriptFilter;
       pick?: ScriptPick;
+      /**
+       * Tap this far from the matched words instead of on them, normalized.
+       *
+       * Relative to the match, not the screen, so it follows the target as it
+       * moves — which is the whole reason to use a label as an anchor for
+       * something next to it: a row's button, the checkbox beside a name.
+       */
+      offsetX?: number;
+      offsetY?: number;
     }
   /** Branch on whether recognised text contains `text`. */
   | { type: "ifText"; text: string; region?: ScriptRegion; then: ScriptStep[]; else?: ScriptStep[] }

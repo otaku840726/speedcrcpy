@@ -24,7 +24,12 @@ const ORDER_LABELS: Record<string, string> = {
  * while everything is default, so a step that doesn't use any of this looks
  * exactly as it did before.
  */
-function PickSummary({ filter, pick }: { filter?: ScriptFilter; pick?: ScriptPick }) {
+function PickSummary({
+  filter,
+  pick,
+  offsetX,
+  offsetY,
+}: { filter?: ScriptFilter; pick?: ScriptPick; offsetX?: number; offsetY?: number }) {
   const parts = [
     filter?.mode && filter.mode !== "contains" ? MODE_LABELS[filter.mode] : null,
     filter?.color ? `色 ${filter.color}` : null,
@@ -33,6 +38,7 @@ function PickSummary({ filter, pick }: { filter?: ScriptFilter; pick?: ScriptPic
     pick?.expect === "one" ? "剛好 1 個" : null,
     pick?.by && pick.by !== "reading" ? ORDER_LABELS[pick.by] : null,
     pick?.index ? `第 ${pick.index + 1} 個` : null,
+    offsetX || offsetY ? "有偏移" : null,
   ].filter(Boolean);
   if (!parts.length) return null;
   return <span className="sp-summary">{parts.join(" · ")}</span>;
@@ -127,7 +133,14 @@ interface PickResult {
 function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickMode; onPick: (r: PickResult) => void; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<{ target: TestTarget; path: Path; selectable: boolean; filter?: ScriptFilter; pick?: ScriptPick }>();
+  const [test, setTest] = useState<{
+    target: TestTarget;
+    path: Path;
+    selectable: boolean;
+    filter?: ScriptFilter;
+    pick?: ScriptPick;
+    offset?: { x: number; y: number };
+  }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
@@ -415,7 +428,9 @@ function StepRow({
           >
             設定與測試
           </button>
-          {step.type === "findTap" && <PickSummary filter={step.filter} pick={step.pick} />}
+          {step.type === "findTap" && (
+            <PickSummary filter={step.filter} pick={step.pick} offsetX={step.offsetX} offsetY={step.offsetY} />
+          )}
           {step.type === "findTap" && (
             <>
               逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
@@ -478,7 +493,7 @@ function StepRow({
             </button>
             {step.type === "tapText" && (
               <>
-                <PickSummary filter={step.filter} pick={step.pick} />
+                <PickSummary filter={step.filter} pick={step.pick} offsetX={step.offsetX} offsetY={step.offsetY} />
                 逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
               </>
             )}
@@ -582,7 +597,14 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<{ target: TestTarget; path: Path; selectable: boolean; filter?: ScriptFilter; pick?: ScriptPick }>();
+  const [test, setTest] = useState<{
+    target: TestTarget;
+    path: Path;
+    selectable: boolean;
+    filter?: ScriptFilter;
+    pick?: ScriptPick;
+    offset?: { x: number; y: number };
+  }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
 
@@ -829,6 +851,10 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                     selectable: step.type === "tapText" || step.type === "findTap",
                     filter: "filter" in step ? step.filter : undefined,
                     pick: "pick" in step ? step.pick : undefined,
+                    offset:
+                      "offsetX" in step && (step.offsetX || step.offsetY)
+                        ? { x: step.offsetX ?? 0, y: step.offsetY ?? 0 }
+                        : undefined,
                   })
                 }
               />
@@ -869,6 +895,19 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
           }
           filter={test.filter}
           pick={test.pick}
+          offset={test.offset}
+          onOffsetChange={
+            test.selectable
+              ? (offset) => {
+                  editSteps((s) => editList(s, test.path, (list, i) =>
+                    list.map((step, j) =>
+                      j === i ? ({ ...step, offsetX: offset?.x, offsetY: offset?.y } as ScriptStep) : step,
+                    ),
+                  ));
+                  setTest({ ...test, offset });
+                }
+              : undefined
+          }
           onChange={
             test.selectable
               ? (filter, pick) => {

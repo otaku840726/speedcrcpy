@@ -90,6 +90,8 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       occurrence: z.coerce.number().int().min(0).max(50).optional(),
       filter: FilterSchema,
       pick: PickSchema,
+      offsetX: z.coerce.number().min(-1).max(1).optional(),
+      offsetY: z.coerce.number().min(-1).max(1).optional(),
     }),
     z.object({
       type: z.literal("ifText"),

@@ -1501,6 +1501,9 @@ button.tp-swatch:not(:disabled):hover {
   height: 100%;
   pointer-events: none;
 }
+.tp-link.offset line {
+  stroke: #3ddc84;
+}
 .tp-link line {
   stroke: #f0a94b;
   stroke-width: 0.4;

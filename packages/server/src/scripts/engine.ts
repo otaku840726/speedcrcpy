@@ -340,7 +340,7 @@ export class ScriptEngine {
           const result = await recognize(frame, step.region, step.text);
           const pick = scriptSelect(result.matches, step.text, step.filter, step.pick, frame);
           if (pick.chosen) {
-            const [px, py] = this.toPixels(run, pick.chosen.x, pick.chosen.y);
+            const [px, py] = this.toPixels(run, pick.chosen.x + (step.offsetX ?? 0), pick.chosen.y + (step.offsetY ?? 0));
             await sh(adb, `input tap ${px} ${py}`);
             this.log(run, `找到文字「${pick.chosen.text}」${this.nth(pick, step.pick)} → 點擊 ${px},${py} (${result.ms}ms)`);
             return;

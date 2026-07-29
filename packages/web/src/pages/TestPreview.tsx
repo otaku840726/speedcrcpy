@@ -110,6 +110,8 @@ export function TestPreview({
   filter,
   pick,
   onChange,
+  offset,
+  onOffsetChange,
   onClose,
   onSuggestThreshold,
 }: {
@@ -120,6 +122,9 @@ export function TestPreview({
   /** Absent for the if-steps, which only ask whether anything matched and so
    * have no single target to configure. */
   onChange?: (filter: ScriptFilter, pick: ScriptPick) => void;
+  /** Where the tap lands relative to the match, normalized. */
+  offset?: { x: number; y: number };
+  onOffsetChange?: (offset: { x: number; y: number } | undefined) => void;
   onClose: () => void;
   onSuggestThreshold?: (value: number) => void;
 }) {
@@ -127,9 +132,9 @@ export function TestPreview({
   const [match, setMatch] = useState<MatchProbe>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
-  /** Armed by the 在畫面上點選 button: the next click on the picture sets the
-   * reference point instead of selecting a candidate. */
-  const [arming, setArming] = useState(false);
+  /** Armed by a 在畫面上點選 button: the next click on the picture sets that
+   * value instead of selecting a candidate. */
+  const [arming, setArming] = useState<"ref" | "offset">();
 
   const run = () => {
     setBusy(true);
@@ -174,6 +179,10 @@ export function TestPreview({
   const chosen = selection.chosen;
   const needsRef = NEEDS_REF.has(pick?.by ?? "reading");
   const ref = { x: pick?.refX ?? 0.5, y: pick?.refY ?? 0.5 };
+  const off = { x: offset?.x ?? 0, y: offset?.y ?? 0 };
+  const hasOffset = !!(off.x || off.y);
+  /** Where the tap actually lands: the match, shifted by the offset. */
+  const tapAt = chosen ? { x: chosen.x + off.x, y: chosen.y + off.y } : undefined;
 
   const boxStyle = (b: Box) => ({
     left: `${(b.x - b.w / 2) * 100}%`,
@@ -209,8 +218,12 @@ export function TestPreview({
                 arming
                   ? (e) => {
                       const r = e.currentTarget.getBoundingClientRect();
-                      set({ pick: { refX: (e.clientX - r.left) / r.width, refY: (e.clientY - r.top) / r.height } });
-                      setArming(false);
+                      const at = { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+                      // An offset is stored against the match, not the screen,
+                      // so it is the difference between the two.
+                      if (arming === "offset" && chosen) onOffsetChange?.({ x: at.x - chosen.x, y: at.y - chosen.y });
+                      else if (arming === "ref") set({ pick: { refX: at.x, refY: at.y } });
+                      setArming(undefined);
                     }
                   : undefined
               }
@@ -261,14 +274,22 @@ export function TestPreview({
                 </>
               )}
 
-              {chosen && (
+              {/* With an offset the tap is not on the match, so join the two —
+                  otherwise the crosshair looks like it missed. */}
+              {chosen && tapAt && hasOffset && (
+                <svg className="tp-link offset" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  <line x1={chosen.x * 100} y1={chosen.y * 100} x2={tapAt.x * 100} y2={tapAt.y * 100} />
+                </svg>
+              )}
+
+              {tapAt && (
                 <>
-                  <div className="tp-cross" style={{ left: `${chosen.x * 100}%`, top: `${chosen.y * 100}%` }} />
+                  <div className="tp-cross" style={{ left: `${tapAt.x * 100}%`, top: `${tapAt.y * 100}%` }} />
                   <div
-                    className={`tp-taplab${chosen.x > 0.5 ? " flip" : ""}`}
-                    style={{ left: `${chosen.x * 100}%`, top: `${chosen.y * 100}%` }}
+                    className={`tp-taplab${tapAt.x > 0.5 ? " flip" : ""}`}
+                    style={{ left: `${tapAt.x * 100}%`, top: `${tapAt.y * 100}%` }}
                   >
-                    {Math.round(chosen.x * probe.frameWidth)},{Math.round(chosen.y * probe.frameHeight)}
+                    {Math.round(tapAt.x * probe.frameWidth)},{Math.round(tapAt.y * probe.frameHeight)}
                   </div>
                 </>
               )}
@@ -395,14 +416,39 @@ export function TestPreview({
                     />
                     <span className="muted">個</span>
                   </div>
+                  {onOffsetChange && (
+                    <div className="tp-line">
+                      <span className="tp-key">點擊偏移</span>
+                      <span className="tp-val">
+                        {hasOffset
+                          ? `${off.x >= 0 ? "+" : ""}${Math.round(off.x * frame.width)}, ${off.y >= 0 ? "+" : ""}${Math.round(off.y * frame.height)} px`
+                          : "無（點在目標上）"}
+                      </span>
+                      <button
+                        className={arming === "offset" ? "primary" : ""}
+                        disabled={!chosen}
+                        title={chosen ? "在畫面上點你真正要按的位置" : "要先有命中的目標才能設偏移"}
+                        onClick={() => setArming((a) => (a === "offset" ? undefined : "offset"))}
+                      >
+                        {arming === "offset" ? "點畫面上的位置…" : "在畫面上點選"}
+                      </button>
+                      {hasOffset && <button onClick={() => onOffsetChange(undefined)}>清除</button>}
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        相對目標,目標移動時跟著走
+                      </span>
+                    </div>
+                  )}
                   {needsRef && (
                     <div className="tp-line">
                       <span className="tp-key">參考點</span>
                       <span className="tp-val">
                         {Math.round(ref.x * frame.width)},{Math.round(ref.y * frame.height)}
                       </span>
-                      <button className={arming ? "primary" : ""} onClick={() => setArming((a) => !a)}>
-                        {arming ? "點畫面上的位置…" : "在畫面上點選"}
+                      <button
+                        className={arming === "ref" ? "primary" : ""}
+                        onClick={() => setArming((a) => (a === "ref" ? undefined : "ref"))}
+                      >
+                        {arming === "ref" ? "點畫面上的位置…" : "在畫面上點選"}
                       </button>
                       <span className="muted" style={{ fontSize: 11 }}>
                         預設畫面中心 — 鏡頭鎖定角色的遊戲通常就是角色所在
