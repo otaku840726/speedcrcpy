@@ -1,3 +1,5 @@
+import { foldHan } from "./han-fold.js";
+
 /**
  * Automation script model (see docs/automation-scripts.md).
  *
@@ -58,6 +60,8 @@ export type ScriptStep =
       /** Optional tap offset from the match centre, normalized. */
       offsetX?: number;
       offsetY?: number;
+      /** Which match to tap when the template appears more than once. */
+      occurrence?: number;
     }
   /** Branch on whether the template is on screen right now. */
   | {
@@ -75,7 +79,14 @@ export type ScriptStep =
    * A region is strongly recommended: whole-screen OCR is ~30x slower and its
    * boxes span the whole line, which makes the tap point useless.
    */
-  | { type: "tapText"; text: string; region?: ScriptRegion; timeoutMs: number }
+  | {
+      type: "tapText";
+      text: string;
+      region?: ScriptRegion;
+      timeoutMs: number;
+      /** Which match to tap when the text appears more than once. */
+      occurrence?: number;
+    }
   /** Branch on whether recognised text contains `text`. */
   | { type: "ifText"; text: string; region?: ScriptRegion; then: ScriptStep[]; else?: ScriptStep[] }
   /** Read the first number in the region and compare it. */
@@ -169,66 +180,29 @@ export interface DeviceSchedule {
   scripts: ScheduleScript[];
 }
 
+/**
+ * Which match a step aims at when several are on screen, counted in **reading
+ * order** — top to bottom, then left to right within a row. 0 is the first.
+ *
+ * Picking silently (highest score, narrowest box) looks fine until the screen
+ * has two of something, and then it is unpredictable; an explicit index is
+ * something a script author can reason about, and the editor's test preview
+ * numbers the candidates so it can be chosen by clicking.
+ */
+export const DEFAULT_OCCURRENCE = 0;
+
 // ---- text matching helpers (shared so the engine and the editor agree) ----
 
-/** Rough advance width: CJK and full-width glyphs take about twice a Latin one. */
-function charWidth(ch: string): number {
-  const code = ch.codePointAt(0) ?? 0;
-  return code >= 0x1100 && !(code >= 0x2000 && code <= 0x206f) ? 2 : 1;
-}
-
-const stripText = (s: string) => s.replace(/\s+/g, "").toLowerCase();
-
-/** Whitespace-insensitive containment, the way a script author means it. */
-export function scriptTextMatches(haystack: string, needle: string): boolean {
-  return stripText(haystack).includes(stripText(needle));
-}
-
 /**
- * Where to tap for `needle` inside a recognised line.
- *
- * OCR groups everything on one horizontal band into a single line, so the
- * line's own centre can sit far from the words that matched — an app icon and
- * its label routinely share a line, and tapping the middle hits the icon. This
- * estimates the substring's centre by advancing through the text, which is
- * close enough to land inside the words. A tight region is still the most
- * reliable way to aim.
- *
- * Returns normalized coordinates, or the line centre when the needle isn't in it.
+ * The form two pieces of text are compared in: no whitespace, lower case, one
+ * Han variant. OCR drops and inserts spaces freely, and flips 裝/装 depending
+ * on the crop it saw, so none of those differences may decide a match.
  */
-export function scriptTextTapPoint(
-  line: { text: string; x: number; y: number; w: number; h: number },
-  needle: string,
-): { x: number; y: number } {
-  const chars = [...line.text];
-  // Map each stripped-text position back to its index in the original string.
-  const originalIndex: number[] = [];
-  let stripped = "";
-  chars.forEach((ch, i) => {
-    if (!/\s/.test(ch)) {
-      stripped += ch.toLowerCase();
-      originalIndex.push(i);
-    }
-  });
+export function scriptTextKey(text: string): string {
+  return foldHan(text).replace(/\s+/g, "").toLowerCase();
+}
 
-  const want = stripText(needle);
-  const at = stripped.indexOf(want);
-  if (!want || at < 0) return { x: line.x, y: line.y };
-
-  const startChar = originalIndex[at] ?? 0;
-  const endChar = (originalIndex[at + [...want].length - 1] ?? chars.length - 1) + 1;
-
-  let total = 0;
-  let before = 0;
-  let inside = 0;
-  chars.forEach((ch, i) => {
-    const w = charWidth(ch);
-    total += w;
-    if (i < startChar) before += w;
-    else if (i < endChar) inside += w;
-  });
-  if (total === 0) return { x: line.x, y: line.y };
-
-  const centreFraction = (before + inside / 2) / total;
-  return { x: line.x - line.w / 2 + centreFraction * line.w, y: line.y };
+/** Whitespace- and variant-insensitive containment, the way an author means it. */
+export function scriptTextMatches(haystack: string, needle: string): boolean {
+  return scriptTextKey(haystack).includes(scriptTextKey(needle));
 }

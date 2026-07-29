@@ -6,7 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup",
     "typecheck": "tsc --noEmit",
-    "postinstall": "fetch-scrcpy-server 3.3.4"
+    "postinstall": "fetch-scrcpy-server 3.3.4 && node scripts/fetch-ocr-models.mjs"
   },
   "dependencies": {
     "@fails-components/webtransport": "1.6.7",

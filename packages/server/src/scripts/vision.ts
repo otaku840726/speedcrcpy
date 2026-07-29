@@ -96,7 +96,38 @@ export interface MatchResult {
   /** Size of the match (= the template), normalized — lets a UI draw the box. */
   w: number;
   h: number;
+  /**
+   * Every place the template scored at or above the requested threshold, in
+   * reading order — a screen often holds several copies of the same button, and
+   * silently taking the highest score makes which one gets tapped unpredictable.
+   * Empty when no threshold was requested.
+   */
+  matches: MatchHit[];
 }
+
+export type MatchHit = Omit<MatchResult, "matches">;
+
+/** Ceiling on reported matches; a low threshold on flat art can hit anything. */
+const MAX_MATCHES = 12;
+
+/**
+ * Reading order: top to bottom, then left to right within a row. Boxes belong
+ * to the same row when their vertical centres are within half a line height.
+ *
+ * This is what an `occurrence` index counts, so it has to be something a script
+ * author can predict by looking at the screen.
+ */
+export function readingOrder<T extends { x: number; y: number; h: number }>(boxes: T[]): T[] {
+  const rows: T[][] = [];
+  for (const box of [...boxes].sort((a, b) => a.y - b.y)) {
+    const row = rows[rows.length - 1];
+    const head = row?.[0];
+    if (row && head && Math.abs(box.y - head.y) < Math.min(box.h, head.h) * 0.6) row.push(box);
+    else rows.push([box]);
+  }
+  return rows.flatMap((row) => row.sort((a, b) => a.x - b.x));
+}
+
 
 /** Search region in normalized coords; omit to search the whole frame. */
 export interface Region {
@@ -111,7 +142,12 @@ export interface Region {
  * tool); the best normalized-correlation score and the match centre come back,
  * so the caller compares against its own threshold.
  */
-export async function findTemplate(frame: Frame, templatePng: Uint8Array, region?: Region): Promise<MatchResult> {
+export async function findTemplate(
+  frame: Frame,
+  templatePng: Uint8Array,
+  region?: Region,
+  threshold?: number,
+): Promise<MatchResult> {
   const cv = await loadCv();
 
   // Frame → Mat (RGBA), optionally cropped to the search region, then RGB:
@@ -165,21 +201,42 @@ export async function findTemplate(frame: Frame, templatePng: Uint8Array, region
   // The mask argument is optional at runtime but required by the typings.
   const noMask = new cv.Mat();
   const { maxVal, maxLoc } = cv.minMaxLoc(result, noMask);
-  noMask.delete();
   const needleCols = needle.cols;
   const needleRows = needle.rows;
-  const centreX = offsetX + maxLoc.x + needleCols / 2;
-  const centreY = offsetY + maxLoc.y + needleRows / 2;
+  const hit = (px: number, py: number, score: number): MatchHit => ({
+    score,
+    x: (offsetX + px + needleCols / 2) / frame.width,
+    y: (offsetY + py + needleRows / 2) / frame.height,
+    w: needleCols / frame.width,
+    h: needleRows / frame.height,
+  });
+
+  // Non-maximum suppression by repeated peak-picking: take the global best,
+  // blank out a template-sized neighbourhood so its own shoulders can't be
+  // reported as separate hits, and go again. Bounded by MAX_MATCHES, and far
+  // cheaper in memory than materialising every above-threshold cell.
+  const matches: MatchHit[] = [];
+  if (threshold !== undefined) {
+    const scores = result.data32F;
+    const cols = result.cols;
+    const halfW = Math.max(1, Math.floor(needleCols / 2));
+    const halfH = Math.max(1, Math.floor(needleRows / 2));
+    let peak = { maxVal, maxLoc };
+    while (matches.length < MAX_MATCHES && peak.maxVal >= threshold) {
+      matches.push(hit(peak.maxLoc.x, peak.maxLoc.y, peak.maxVal));
+      for (let y = Math.max(0, peak.maxLoc.y - halfH); y <= Math.min(result.rows - 1, peak.maxLoc.y + halfH); y++) {
+        for (let x = Math.max(0, peak.maxLoc.x - halfW); x <= Math.min(cols - 1, peak.maxLoc.x + halfW); x++) {
+          scores[y * cols + x] = -1;
+        }
+      }
+      peak = cv.minMaxLoc(result, noMask);
+    }
+  }
+  noMask.delete();
   result.delete();
   cleanup();
 
-  return {
-    score: maxVal,
-    x: centreX / frame.width,
-    y: centreY / frame.height,
-    w: needleCols / frame.width,
-    h: needleRows / frame.height,
-  };
+  return { ...hit(maxLoc.x, maxLoc.y, maxVal), matches: readingOrder(matches) };
 }
 
 /**

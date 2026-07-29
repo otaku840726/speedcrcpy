@@ -31,6 +31,8 @@ const TemplateSchema = z.object({
   capturedWidth: z.coerce.number().int().min(1).max(8192),
   capturedHeight: z.coerce.number().int().min(1).max(8192),
 });
+/** Which match to act on when several are found, counted in reading order. */
+const Occurrence = z.coerce.number().int().min(0).max(50).optional();
 /** Step tree — recursive because `loop` nests a body. */
 const StepSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
@@ -58,8 +60,15 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       region: RegionSchema.optional(),
       offsetX: z.coerce.number().min(-1).max(1).optional(),
       offsetY: z.coerce.number().min(-1).max(1).optional(),
+      occurrence: Occurrence,
     }),
-    z.object({ type: z.literal("tapText"), text: z.string().min(1).max(100), region: RegionSchema.optional(), timeoutMs: Timeout }),
+    z.object({
+      type: z.literal("tapText"),
+      text: z.string().min(1).max(100),
+      region: RegionSchema.optional(),
+      timeoutMs: Timeout,
+      occurrence: Occurrence,
+    }),
     z.object({
       type: z.literal("ifText"),
       text: z.string().min(1).max(100),
@@ -101,8 +110,20 @@ const ScriptBody = z.object({
 
 /** Preview images are only for eyeballing position; coordinates stay normalized. */
 const PREVIEW_WIDTH = 720;
-const OcrProbeBody = z.object({ region: RegionSchema.optional() });
-const MatchProbeBody = z.object({ template: TemplateSchema, region: RegionSchema.optional() });
+/** `text` is optional: supply it and the probe also reports where a tap for
+ * that text would land, refined to the matching words. */
+const OcrProbeBody = z.object({
+  region: RegionSchema.optional(),
+  text: z.string().max(100).optional(),
+  occurrence: z.number().int().min(0).max(50).optional(),
+});
+const MatchProbeBody = z.object({
+  template: TemplateSchema,
+  region: RegionSchema.optional(),
+  /** Supply it and the probe also lists every match, so the editor can show the
+   * author what the choices are instead of just the single best one. */
+  threshold: z.number().min(0).max(1).optional(),
+});
 
 const DisplayBody = z.object({
   reset: z.boolean().optional(),
@@ -299,7 +320,10 @@ export function registerRoutes(
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
       const frame = await capture(await adbManager.getAdb(request.params.serial));
-      const result = await recognize(frame, body.data.region);
+      const result = await recognize(frame, body.data.region, {
+        needle: body.data.text || undefined,
+        occurrence: body.data.occurrence,
+      });
       return {
         ...result,
         frameWidth: frame.width,
@@ -320,7 +344,7 @@ export function registerRoutes(
       const frame = await capture(await adbManager.getAdb(request.params.serial));
       const started = Date.now();
       const template = body.data.template;
-      const match = await findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region);
+      const match = await findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region, body.data.threshold);
       const ms = Date.now() - started;
 
       // Crop what it actually matched, so the author can eyeball whether the

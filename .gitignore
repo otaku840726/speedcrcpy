@@ -4,3 +4,6 @@ data/
 *.h264
 *.log
 .DS_Store
+
+# PP-OCRv6 weights, fetched by postinstall (see scripts/fetch-ocr-models.mjs)
+packages/server/models/

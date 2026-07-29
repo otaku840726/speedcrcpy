@@ -1,4 +1,3 @@
-import { scriptTextTapPoint } from "@speedcrcpy/shared";
 import type {
   Script,
   ScriptKey,
@@ -177,6 +176,12 @@ export class ScriptEngine {
     }
   }
 
+  /** "(2 個中的第 1 個)" — silent when there was only ever one candidate, so
+   * the log stays quiet until ambiguity is actually in play. */
+  private nth(total: number, occurrence: number | undefined): string {
+    return total > 1 ? `(${total} 個中的第 ${(occurrence ?? 0) + 1} 個)` : "";
+  }
+
   /** Vision steps already hold a frame — resync the mapping so a rotation
    * that happens mid-run is picked up immediately. */
   private syncSize(run: Run, frame: { width: number; height: number }): void {
@@ -269,17 +274,23 @@ export class ScriptEngine {
           const frame = await capture(adb);
           this.syncSize(run, frame);
           this.warnTemplateScale(run, step.template, frame.width, frame.height);
-          const match = await findTemplate(frame, templateBytes(step.template), step.region);
-          if (match.score >= step.threshold) {
-            const nx = match.x + (step.offsetX ?? 0);
-            const ny = match.y + (step.offsetY ?? 0);
+          const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
+          const pick = match.matches[step.occurrence ?? 0];
+          if (pick) {
+            const nx = pick.x + (step.offsetX ?? 0);
+            const ny = pick.y + (step.offsetY ?? 0);
             const [px, py] = this.toPixels(run, nx, ny);
             await sh(adb, `input tap ${px} ${py}`);
-            this.log(run, `找圖命中 ${(match.score * 100).toFixed(0)}% → 點擊 ${px},${py}`);
+            this.log(run, `找圖命中 ${this.nth(match.matches.length, step.occurrence)} ${(pick.score * 100).toFixed(0)}% → 點擊 ${px},${py}`);
             return;
           }
           if (Date.now() >= deadline) {
-            this.log(run, `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`);
+            this.log(
+              run,
+              match.matches.length
+                ? `找圖逾時:只找到 ${match.matches.length} 個,取不到第 ${(step.occurrence ?? 0) + 1} 個`
+                : `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`,
+            );
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
@@ -289,8 +300,8 @@ export class ScriptEngine {
         const frame = await capture(adb);
         this.syncSize(run, frame);
         this.warnTemplateScale(run, step.template, frame.width, frame.height);
-        const match = await findTemplate(frame, templateBytes(step.template), step.region);
-        const hit = match.score >= step.threshold;
+        const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
+        const hit = match.matches.length > 0;
         this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
@@ -301,19 +312,25 @@ export class ScriptEngine {
           this.checkStop(run);
           const frame = await capture(adb);
           this.syncSize(run, frame);
-          const result = await recognize(frame, step.region);
-          const line = result.lines.find((l) => textMatches(l.text, step.text));
-          if (line) {
-            // OCR merges a whole horizontal band into one line, so aim at the
-            // matched words rather than the line's centre.
-            const point = scriptTextTapPoint(line, step.text);
-            const [px, py] = this.toPixels(run, point.x, point.y);
+          // `tap` is the matched words, narrowed down from the line they sit on
+          // — OCR merges a whole horizontal band (icon and all) into one box.
+          const result = await recognize(frame, step.region, { needle: step.text, occurrence: step.occurrence });
+          if (result.tap) {
+            const [px, py] = this.toPixels(run, result.tap.x, result.tap.y);
             await sh(adb, `input tap ${px} ${py}`);
-            this.log(run, `找到文字「${line.text}」→ 點擊 ${px},${py} (${result.ms}ms)`);
+            this.log(
+              run,
+              `找到文字「${result.tap.text}」${this.nth(result.matches.length, step.occurrence)} → 點擊 ${px},${py} (${result.ms}ms)`,
+            );
             return;
           }
           if (Date.now() >= deadline) {
-            this.log(run, `找不到文字「${step.text}」逾時(讀到:${result.text.slice(0, 40) || "(空)"})`);
+            this.log(
+              run,
+              result.matches.length
+                ? `找不到第 ${(step.occurrence ?? 0) + 1} 個「${step.text}」逾時(畫面上只有 ${result.matches.length} 個)`
+                : `找不到文字「${step.text}」逾時(讀到:${result.text.slice(0, 40) || "(空)"})`,
+            );
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);

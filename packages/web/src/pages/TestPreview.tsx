@@ -1,4 +1,4 @@
-import { scriptTextTapPoint, type ScriptRegion, type ScriptTemplate } from "@speedcrcpy/shared";
+import { scriptTextKey, type ScriptRegion, type ScriptTemplate } from "@speedcrcpy/shared";
 import { useEffect, useState } from "react";
 import { api } from "../api";
 
@@ -17,6 +17,12 @@ interface Box {
 
 interface OcrProbe {
   lines: (Box & { text: string; confidence: number })[];
+  /** Every place the step's text was found, in reading order — the matching
+   * words, not the line they share with an icon. Computed server-side so the
+   * preview and the engine cannot disagree about where a tap lands. */
+  matches: (Box & { text: string })[];
+  /** The one `occurrence` selects. */
+  tap: (Box & { text: string }) | null;
   text: string;
   ms: number;
   frameWidth: number;
@@ -26,6 +32,8 @@ interface OcrProbe {
 
 interface MatchProbe extends Box {
   score: number;
+  /** Every place the template passed the threshold, in reading order. */
+  matches: (Box & { score: number })[];
   ms: number;
   frameWidth: number;
   frameHeight: number;
@@ -35,23 +43,47 @@ interface MatchProbe extends Box {
   suggestedThreshold: number;
 }
 
-export type TestTarget =
-  | { kind: "ocr"; region?: ScriptRegion; text?: string }
-  | { kind: "match"; region?: ScriptRegion; template: ScriptTemplate; threshold: number };
+/** `selectable` marks the steps that actually act on one match (tapText /
+ * findTap) — the if-steps only ask whether anything matched, so offering to
+ * choose between candidates there would be meaningless. */
+export type TestTarget = { selectable?: boolean } & (
+  | { kind: "ocr"; region?: ScriptRegion; text?: string; occurrence?: number }
+  | { kind: "match"; region?: ScriptRegion; template: ScriptTemplate; threshold: number; occurrence?: number }
+);
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
-const strip = (s: string) => s.replace(/\s+/g, "").toLowerCase();
+/** Same normalization the engine matches with — see scriptTextKey. */
+const strip = scriptTextKey;
+
+/** Says which of several candidates the step will act on. Silent when there is
+ * only one, so the note appears exactly when the choice actually matters. */
+function Choice({ count, chosen, pickable }: { count: number; chosen: number; pickable: boolean }) {
+  if (count < 2) return null;
+  return (
+    <div className="tp-choice">
+      畫面上有 <b>{count}</b> 個符合,目前會點<b>第 {chosen + 1} 個</b>
+      <span className="muted">
+        {" "}
+        · 由上而下、同一列由左而右編號{pickable ? " · 點畫面上的編號可改選" : ""}
+      </span>
+    </div>
+  );
+}
 
 export function TestPreview({
   serial,
   target,
   onClose,
   onSuggestThreshold,
+  onPickOccurrence,
 }: {
   serial: string;
   target: TestTarget;
   onClose: () => void;
   onSuggestThreshold?: (value: number) => void;
+  /** Makes the numbered candidates clickable; only used when the target is
+   * `selectable`. */
+  onPickOccurrence?: (index: number) => void;
 }) {
   const [ocr, setOcr] = useState<OcrProbe>();
   const [match, setMatch] = useState<MatchProbe>();
@@ -62,7 +94,10 @@ export function TestPreview({
     setBusy(true);
     setError(undefined);
     const path = target.kind === "ocr" ? "ocr" : "match";
-    const body = target.kind === "ocr" ? { region: target.region } : { region: target.region, template: target.template };
+    const body =
+      target.kind === "ocr"
+        ? { region: target.region, text: target.text, occurrence: target.occurrence }
+        : { region: target.region, template: target.template, threshold: target.threshold };
     api<OcrProbe & MatchProbe>(`/api/devices/${encodeURIComponent(serial)}/${path}`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -77,21 +112,17 @@ export function TestPreview({
   const region = target.region;
   /** The step's match text, when this is a text step (narrowed once here). */
   const wanted = target.kind === "ocr" ? target.text : undefined;
-  // OCR: the line that the step's text would match. Match: the single best hit.
-  const hit =
+  /** Candidates the step could aim at, in the same reading order the engine
+   * counts — index 0 is what `occurrence` defaults to. */
+  const candidates: (Box & { label: string })[] =
     target.kind === "ocr"
-      ? ocr?.lines.find((l) => wanted && strip(l.text).includes(strip(wanted)))
-      : match && match.score >= target.threshold
-        ? match
-        : undefined;
-  // For text, aim at the matched words inside the line (the engine does the
-  // same) — a line often spans an icon and its label.
-  const tapAt =
-    hit && wanted && target.kind === "ocr"
-      ? scriptTextTapPoint(hit as { text: string; x: number; y: number; w: number; h: number }, wanted)
-      : hit;
-  const tapX = tapAt?.x;
-  const tapY = tapAt?.y;
+      ? (ocr?.matches ?? []).map((m) => ({ ...m, label: m.text }))
+      : (match?.matches ?? []).map((m) => ({ ...m, label: pct(m.score) }));
+  const chosen = Math.min(target.occurrence ?? 0, Math.max(0, candidates.length - 1));
+  const pick = target.selectable ? onPickOccurrence : undefined;
+  const hit = candidates[chosen];
+  const tapX = hit?.x;
+  const tapY = hit?.y;
 
   return (
     <div className="picker-backdrop" onClick={onClose}>
@@ -132,7 +163,7 @@ export function TestPreview({
             {ocr?.lines.map((line, i) => (
               <div
                 key={i}
-                className={`tp-box-outline${line === hit ? " hit" : ""}`}
+                className="tp-box-outline"
                 style={{
                   left: `${(line.x - line.w / 2) * 100}%`,
                   top: `${(line.y - line.h / 2) * 100}%`,
@@ -143,10 +174,11 @@ export function TestPreview({
               />
             ))}
 
-            {/* The single best template match (green only when it passes). */}
-            {match && (
+            {/* Nothing passed the threshold: show the near miss so the author
+                can see what the score was actually measuring. */}
+            {match && !candidates.length && (
               <div
-                className={`tp-box-outline${hit ? " hit" : " miss"}`}
+                className="tp-box-outline miss"
                 style={{
                   left: `${(match.x - match.w / 2) * 100}%`,
                   top: `${(match.y - match.h / 2) * 100}%`,
@@ -156,12 +188,35 @@ export function TestPreview({
               />
             )}
 
+            {/* The candidates, numbered in the order the engine counts them.
+                Which one gets tapped is a choice, so make it a visible one. */}
+            {candidates.map((c, i) => (
+              <div
+                key={i}
+                className={`tp-box-outline tp-cand${i === chosen ? " hit tp-refined" : ""}${pick ? " pickable" : ""}`}
+                style={{
+                  left: `${(c.x - c.w / 2) * 100}%`,
+                  top: `${(c.y - c.h / 2) * 100}%`,
+                  width: `${c.w * 100}%`,
+                  height: `${c.h * 100}%`,
+                }}
+                title={`第 ${i + 1} 個 · ${c.label}`}
+                onClick={pick ? () => pick(i) : undefined}
+              >
+                {candidates.length > 1 && <span className="tp-cand-no">{i + 1}</span>}
+              </div>
+            ))}
+
             {tapX !== undefined && tapY !== undefined && (
               <>
                 <div className="tp-cross" style={{ left: `${tapX * 100}%`, top: `${tapY * 100}%` }} />
-                <div className="tp-taplab" style={{ left: `${tapX * 100}%`, top: `${tapY * 100}%` }}>
-                  點擊 ({tapX.toFixed(3)}, {tapY.toFixed(3)}) → {Math.round(tapX * probe.frameWidth)},
-                  {Math.round(tapY * probe.frameHeight)}
+                {/* Pixels only — the preview is narrow, and a longer label gets
+                    clipped at the edge. The normalized pair is in the footer. */}
+                <div
+                  className={`tp-taplab${tapX > 0.5 ? " flip" : ""}`}
+                  style={{ left: `${tapX * 100}%`, top: `${tapY * 100}%` }}
+                >
+                  {Math.round(tapX * probe.frameWidth)},{Math.round(tapY * probe.frameHeight)}
                 </div>
               </>
             )}
@@ -173,7 +228,14 @@ export function TestPreview({
             <div>
               {wanted ? (
                 hit ? (
-                  <span className="tp-ok">✓ 找到符合「{wanted}」的文字</span>
+                  <span className="tp-ok">
+                    ✓ 找到符合「{wanted}」的文字
+                    {strip(hit.label) !== strip(wanted) ? ` — 已收窄到「${hit.label}」` : ""}
+                    <span className="muted">
+                      {" "}
+                      · 點擊 ({hit.x.toFixed(3)}, {hit.y.toFixed(3)})
+                    </span>
+                  </span>
                 ) : (
                   <span className="error-text" style={{ display: "inline" }}>
                     ✕ 沒有符合「{wanted}」的文字 — 請照下方實際讀到的內容調整
@@ -184,6 +246,7 @@ export function TestPreview({
               )}
               <span className="muted"> · {ocr.ms}ms · {ocr.frameWidth}×{ocr.frameHeight}</span>
             </div>
+            <Choice count={candidates.length} chosen={chosen} pickable={!!pick} />
             <div className="tp-read">
               <span className="muted">讀到:</span> {ocr.text || "(沒讀到文字)"}
             </div>
@@ -215,6 +278,7 @@ export function TestPreview({
                 </div>
               </div>
             </div>
+            <Choice count={candidates.length} chosen={chosen} pickable={!!pick} />
             {onSuggestThreshold && (
               <div className="tp-suggest">
                 <span className="muted">建議門檻 {pct(match.suggestedThreshold)}</span>

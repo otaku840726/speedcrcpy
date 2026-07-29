@@ -1223,6 +1223,11 @@ option {
   overflow: hidden;
   background: #000;
   max-width: 100%;
+  /* Never let the column squash this below the picture. The overlays are
+     positioned in % of the stage, so a stage even a few px shorter than the
+     image it wraps puts every box and the crosshair off — measured 26 px of
+     overflow, which moved the tap marker 5% of the screen up the frame. */
+  flex: none;
 }
 .tp-stage img {
   display: block;
@@ -1251,6 +1256,54 @@ option {
 }
 .tp-box-outline.miss {
   border: 2px dashed #f0a94b;
+}
+/* The words the tap was narrowed down to, drawn over the line that contains
+   them — it's the difference between the two boxes that explains the crosshair. */
+.tp-box-outline.tp-refined {
+  border-color: #7cf5b0;
+  background: rgba(124, 245, 176, 0.3);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+/* Candidates the step could aim at. The unselected ones stay visible but quiet
+   — they are alternatives, not findings. */
+.tp-box-outline.tp-cand {
+  border: 2px solid rgba(61, 220, 132, 0.5);
+  background: rgba(61, 220, 132, 0.08);
+}
+.tp-box-outline.tp-cand.pickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.tp-box-outline.tp-cand.pickable:hover {
+  border-color: #7cf5b0;
+  background: rgba(124, 245, 176, 0.22);
+}
+.tp-cand-no {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: rgba(6, 19, 31, 0.9);
+  border: 1px solid #3ddc84;
+  color: #7cf5b0;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.tp-cand.hit .tp-cand-no {
+  background: #3ddc84;
+  color: #06131f;
+}
+.tp-choice {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.tp-choice b {
+  color: #7cf5b0;
 }
 /* The tap point: a crosshair is unambiguous at any preview scale. */
 .tp-cross {
@@ -1291,6 +1344,11 @@ option {
   white-space: nowrap;
   line-height: 1.6;
   pointer-events: none;
+}
+/* A tap on the right half would push the label off the preview, so hang it to
+   the left of the crosshair instead. */
+.tp-taplab.flip {
+  transform: translate(-18px, 8px) translateX(-100%);
 }
 .tp-foot {
   font-size: 12px;

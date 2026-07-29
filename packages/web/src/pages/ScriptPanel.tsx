@@ -368,7 +368,19 @@ function StepRow({
           <button
             className="sp-probe"
             disabled={!step.template.png}
-            onClick={() => probe({ kind: "match", region: step.region, template: step.template, threshold: step.threshold }, path)}
+            onClick={() =>
+              probe(
+                {
+                  kind: "match",
+                  region: step.region,
+                  template: step.template,
+                  threshold: step.threshold,
+                  selectable: step.type === "findTap",
+                  occurrence: step.type === "findTap" ? step.occurrence : undefined,
+                },
+                path,
+              )
+            }
             title={step.template.png ? "測試:看比對到哪裡、相似度多少" : "請先框選圖像"}
           >
             測試
@@ -418,7 +430,18 @@ function StepRow({
             />
             <button
               className="sp-probe"
-              onClick={() => probe({ kind: "ocr", region: step.region, text: step.text }, path)}
+              onClick={() =>
+                probe(
+                  {
+                    kind: "ocr",
+                    region: step.region,
+                    text: step.text,
+                    selectable: step.type === "tapText",
+                    occurrence: step.type === "tapText" ? step.occurrence : undefined,
+                  },
+                  path,
+                )
+              }
               title="測試:看實際讀到什麼、會點在哪裡"
             >
               測試
@@ -742,6 +765,14 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 }
               : undefined
           }
+          onPickOccurrence={(index) => {
+            editSteps((s) => editList(s, test.path, (list, i) =>
+              list.map((step, j) => (j === i ? ({ ...step, occurrence: index } as ScriptStep) : step)),
+            ));
+            // Keep the preview open on the same frame — it already holds every
+            // candidate, so this is just a change of highlight.
+            setTest({ ...test, target: { ...test.target, occurrence: index } });
+          }}
         />
       )}
 
