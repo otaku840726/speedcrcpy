@@ -39,7 +39,9 @@ const FilterSchema = z
   .optional();
 const PickSchema = z
   .object({
-    by: z.enum(["reading", "left", "right", "top", "bottom", "score", "random"]).optional(),
+    by: z.enum(["reading", "left", "right", "top", "bottom", "score", "random", "nearest", "farthest"]).optional(),
+    refX: norm.optional(),
+    refY: norm.optional(),
     index: z.coerce.number().int().min(0).max(50).optional(),
     expect: z.enum(["any", "one"]).optional(),
   })

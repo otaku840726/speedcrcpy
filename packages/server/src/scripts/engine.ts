@@ -297,7 +297,7 @@ export class ScriptEngine {
           this.syncSize(run, frame);
           this.warnTemplateScale(run, step.template, frame.width, frame.height);
           const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
-          const sel = scriptSelect(match.matches, undefined, step.filter, step.pick);
+          const sel = scriptSelect(match.matches, undefined, step.filter, step.pick, frame);
           if (sel.chosen) {
             const nx = sel.chosen.x + (step.offsetX ?? 0);
             const ny = sel.chosen.y + (step.offsetY ?? 0);
@@ -338,7 +338,7 @@ export class ScriptEngine {
           // sit in — OCR merges a whole horizontal row (icon and all) into one
           // box, so its centre is rarely on the text you asked for.
           const result = await recognize(frame, step.region, step.text);
-          const pick = scriptSelect(result.matches, step.text, step.filter, step.pick);
+          const pick = scriptSelect(result.matches, step.text, step.filter, step.pick, frame);
           if (pick.chosen) {
             const [px, py] = this.toPixels(run, pick.chosen.x, pick.chosen.y);
             await sh(adb, `input tap ${px} ${py}`);

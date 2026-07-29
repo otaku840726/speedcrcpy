@@ -73,8 +73,13 @@ const ORDERS: { value: ScriptPickBy; label: string }[] = [
   { value: "top", label: "最上面起" },
   { value: "bottom", label: "最下面起" },
   { value: "score", label: "最像的起" },
+  { value: "nearest", label: "離參考點最近" },
+  { value: "farthest", label: "離參考點最遠" },
   { value: "random", label: "隨機" },
 ];
+
+/** Orders that measure from a point, and so need one to be set. */
+const NEEDS_REF = new Set<ScriptPickBy>(["nearest", "farthest"]);
 
 const REASONS: Record<string, string> = { mode: "前後有字", confidence: "信心度不足" };
 
@@ -101,6 +106,9 @@ export function TestPreview({
   const [match, setMatch] = useState<MatchProbe>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  /** Armed by the 在畫面上點選 button: the next click on the picture sets the
+   * reference point instead of selecting a candidate. */
+  const [arming, setArming] = useState(false);
 
   const run = () => {
     setBusy(true);
@@ -137,8 +145,14 @@ export function TestPreview({
           })),
     [ocr, match, target.kind],
   );
-  const selection = useMemo(() => scriptSelect(candidates, wanted, filter, pick), [candidates, wanted, filter, pick]);
+  const frame = { width: probe?.frameWidth ?? 1, height: probe?.frameHeight ?? 1 };
+  const selection = useMemo(
+    () => scriptSelect(candidates, wanted, filter, pick, frame),
+    [candidates, wanted, filter, pick, frame.width, frame.height],
+  );
   const chosen = selection.chosen;
+  const needsRef = NEEDS_REF.has(pick?.by ?? "reading");
+  const ref = { x: pick?.refX ?? 0.5, y: pick?.refY ?? 0.5 };
 
   const boxStyle = (b: Box) => ({
     left: `${(b.x - b.w / 2) * 100}%`,
@@ -168,7 +182,18 @@ export function TestPreview({
 
         {probe && (
           <div className="tp-work">
-            <div className="tp-stage">
+            <div
+              className={`tp-stage${arming ? " arming" : ""}`}
+              onClick={
+                arming
+                  ? (e) => {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      set({ pick: { refX: (e.clientX - r.left) / r.width, refY: (e.clientY - r.top) / r.height } });
+                      setArming(false);
+                    }
+                  : undefined
+              }
+            >
               <img src={`data:image/png;base64,${probe.preview}`} alt="" />
 
               {target.region && <div className="tp-region" style={boxStyle(target.region)} />}
@@ -201,6 +226,19 @@ export function TestPreview({
                   {selection.kept.length > 1 && <span className="tp-cand-no">{i + 1}</span>}
                 </div>
               ))}
+
+              {/* The reference and a line to the winner: "nearest" is only
+                  checkable if you can see what it measured from. */}
+              {needsRef && (
+                <>
+                  <div className="tp-ref" style={{ left: `${ref.x * 100}%`, top: `${ref.y * 100}%` }} />
+                  {chosen && (
+                    <svg className="tp-link" viewBox="0 0 100 100" preserveAspectRatio="none">
+                      <line x1={ref.x * 100} y1={ref.y * 100} x2={chosen.x * 100} y2={chosen.y * 100} />
+                    </svg>
+                  )}
+                </>
+              )}
 
               {chosen && (
                 <>
@@ -282,6 +320,20 @@ export function TestPreview({
                     />
                     <span className="muted">個</span>
                   </div>
+                  {needsRef && (
+                    <div className="tp-line">
+                      <span className="tp-key">參考點</span>
+                      <span className="tp-val">
+                        {Math.round(ref.x * frame.width)},{Math.round(ref.y * frame.height)}
+                      </span>
+                      <button className={arming ? "primary" : ""} onClick={() => setArming((a) => !a)}>
+                        {arming ? "點畫面上的位置…" : "在畫面上點選"}
+                      </button>
+                      <span className="muted" style={{ fontSize: 11 }}>
+                        預設畫面中心 — 鏡頭鎖定角色的遊戲通常就是角色所在
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}

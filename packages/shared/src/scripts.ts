@@ -227,14 +227,44 @@ export interface ScriptFilter {
  * How to order candidates before taking one. `reading` is top to bottom, then
  * left to right within a row — the order a person would count them in.
  */
-export type ScriptPickBy = "reading" | "left" | "right" | "top" | "bottom" | "score" | "random";
+export type ScriptPickBy =
+  | "reading"
+  | "left"
+  | "right"
+  | "top"
+  | "bottom"
+  | "score"
+  | "random"
+  | "nearest"
+  | "farthest";
 
 export interface ScriptPick {
   by?: ScriptPickBy;
+  /**
+   * Where `nearest`/`farthest` measure from, normalized. Defaults to the centre
+   * of the screen, which is where a camera-locked game keeps the player — so
+   * "the monster closest to my character" is usually the default plus nothing.
+   *
+   * A fixed point only works while the thing you measure from stays put on
+   * screen. Measuring from something that moves needs a step that locates it
+   * first and remembers where it was; these two fields stay as they are when
+   * that lands, with the source becoming a third option.
+   */
+  refX?: number;
+  refY?: number;
   /** Which one after ordering. */
   index?: number;
   /** `one` means several matches are a misread — wait rather than guess. */
   expect?: "any" | "one";
+}
+
+/** The frame candidates were found in. Only distance ordering needs it: a
+ * normalized unit is not the same length across and down a 1080x1920 screen,
+ * so measuring in normalized space would rank a box 100 px below the reference
+ * as closer than one 150 px to the side. */
+export interface ScriptFrameSize {
+  width: number;
+  height: number;
 }
 
 /** Anything a step can act on: a recognised phrase or a template match. */
@@ -284,6 +314,13 @@ export function scriptTextMatchesMode(line: string, needle: string, mode: Script
 const byX = (a: ScriptCandidate, b: ScriptCandidate) => a.x - b.x;
 const byY = (a: ScriptCandidate, b: ScriptCandidate) => a.y - b.y;
 
+/** Squared distance from a candidate to the reference, in frame pixels. */
+function distance2(c: ScriptCandidate, pick: ScriptPick, frame: ScriptFrameSize): number {
+  const dx = (c.x - (pick.refX ?? 0.5)) * frame.width;
+  const dy = (c.y - (pick.refY ?? 0.5)) * frame.height;
+  return dx * dx + dy * dy;
+}
+
 /** Reading order: top to bottom, then left to right within a row. Two boxes
  * share a row when their vertical centres are within half a box height. */
 export function scriptReadingOrder<T extends ScriptCandidate>(boxes: T[]): T[] {
@@ -297,8 +334,16 @@ export function scriptReadingOrder<T extends ScriptCandidate>(boxes: T[]): T[] {
   return rows.flatMap((row) => row.sort(byX));
 }
 
-function order<T extends ScriptCandidate>(kept: T[], by: ScriptPickBy): T[] {
+function order<T extends ScriptCandidate>(kept: T[], pick: ScriptPick, frame: ScriptFrameSize): T[] {
+  const by = pick.by ?? "reading";
   switch (by) {
+    case "nearest":
+    case "farthest": {
+      const sign = by === "nearest" ? 1 : -1;
+      // Reading order breaks ties, so two equidistant candidates keep a stable
+      // order instead of depending on how the sort happened to run.
+      return scriptReadingOrder(kept).sort((a, b) => sign * (distance2(a, pick, frame) - distance2(b, pick, frame)));
+    }
     case "left":
       return [...kept].sort(byX);
     case "right":
@@ -334,6 +379,7 @@ export function scriptSelect<T extends ScriptCandidate>(
   needle: string | undefined,
   filter: ScriptFilter = {},
   pick: ScriptPick = {},
+  frame: ScriptFrameSize = { width: 1, height: 1 },
 ): ScriptSelection<T> {
   const rejected: { candidate: T; reason: ScriptRejectReason }[] = [];
   const kept: T[] = [];
@@ -347,7 +393,7 @@ export function scriptSelect<T extends ScriptCandidate>(
     }
   }
 
-  const ordered = order(kept, pick.by ?? "reading");
+  const ordered = order(kept, pick, frame);
   const unsettled = pick.expect === "one" && ordered.length !== 1;
   return {
     kept: ordered,

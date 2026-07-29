@@ -14,6 +14,8 @@ const ORDER_LABELS: Record<string, string> = {
   top: "最上起",
   bottom: "最下起",
   score: "最像的起",
+  nearest: "離參考點最近",
+  farthest: "離參考點最遠",
   random: "隨機",
 };
 
