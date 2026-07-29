@@ -15,8 +15,9 @@ import type {
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { AdbManager } from "../adb/adb-manager.js";
-import { parseNumber, recognize, textMatches } from "./ocr.js";
-import { capture, colorAt, colorMatches, findTemplate, parseHex } from "./vision.js";
+import { parseNumber, textMatches } from "./ocr.js";
+import { findTemplate, recognize } from "./vision-offload.js";
+import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
 
 const decoder = new TextDecoder();
 

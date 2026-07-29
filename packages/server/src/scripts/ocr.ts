@@ -28,7 +28,25 @@ import type { Frame, Region } from "./vision.js";
  * tappable box.
  */
 
-const MODELS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "models");
+/**
+ * The server package root, found by walking up to the nearest package.json.
+ *
+ * A fixed number of `..` cannot work: this module lives at `src/scripts/` when
+ * run from source and is bundled into `dist/index.js` for production, so the
+ * two layouts are a different depth from the package root. Getting it wrong is
+ * invisible — the weights simply appear missing and the engine drops to the
+ * bundled v4, which reads traditional Chinese wrongly but never errors.
+ */
+function packageRoot(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6 && dir !== dirname(dir); i++) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    dir = dirname(dir);
+  }
+  return dir;
+}
+
+const MODELS_DIR = join(packageRoot(), "models");
 
 export interface OcrLine extends ScriptCandidate {
   text: string;
@@ -94,6 +112,11 @@ type Detector = { detect(path: string): Promise<{ text: string; mean: number; bo
 type OcrModule = { create(options?: { models: ModelPaths }): Promise<Detector> };
 
 let ocrPromise: Promise<Detector> | undefined;
+
+/** Which weights the engine ended up with — surfaced on /api/health, because a
+ * silent fall back to v4 looks exactly like everything being fine. */
+export const ocrModel = (): { model: string; dir: string } =>
+  fetchedModels() ? { model: "PP-OCRv6-small", dir: MODELS_DIR } : { model: "PP-OCRv4 (bundled fallback)", dir: MODELS_DIR };
 
 /**
  * The fetched PP-OCRv6 weights, or undefined when the postinstall download

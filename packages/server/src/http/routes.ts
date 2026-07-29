@@ -10,8 +10,9 @@ import type { ScriptEngine } from "../scripts/engine.js";
 import type { Scheduler } from "../scripts/scheduler.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
-import { recognize } from "../scripts/ocr.js";
-import { capture, findTemplate, framePng } from "../scripts/vision.js";
+import { ocrModel } from "../scripts/ocr.js";
+import { findTemplate, recognize } from "../scripts/vision-offload.js";
+import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
@@ -163,7 +164,9 @@ export function registerRoutes(
 ): void {
   // Unauthenticated (see the auth hook exemption) so deployment tooling can
   // poll which build is live without a token. `version` is the git SHA.
-  app.get("/api/health", async () => ({ ok: true, version: VERSION, builtAt: BUILT_AT }));
+  // `ocr` is here so a silent fall back to the bundled PP-OCRv4 — which reads
+  // traditional Chinese wrongly but never errors — is visible from outside.
+  app.get("/api/health", async () => ({ ok: true, version: VERSION, builtAt: BUILT_AT, ocr: ocrModel() }));
 
   app.post("/api/login", async (request, reply) => {
     const body = LoginBody.safeParse(request.body);
