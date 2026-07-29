@@ -348,6 +348,7 @@ export function registerRoutes(
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
       const frame = await capture(await adbManager.getAdb(request.params.serial));
+      thumbnails.offer(request.params.serial, frame);
       const result = await recognize(frame, body.data.region, body.data.text || undefined);
       return {
         ...result,
@@ -367,6 +368,7 @@ export function registerRoutes(
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
       const frame = await capture(await adbManager.getAdb(request.params.serial));
+      thumbnails.offer(request.params.serial, frame);
       const started = Date.now();
       const template = body.data.template;
       const match = await findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region, body.data.threshold);

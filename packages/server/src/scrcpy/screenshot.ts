@@ -13,6 +13,20 @@ const THUMB_WIDTH = 160;
  * Returns null when shell v2 (needed for binary-safe stdout) is unavailable or
  * the capture can't be parsed.
  */
+/**
+ * Encode a thumbnail from a frame someone already captured.
+ *
+ * A running script screencaps every poll, and the thumbnail cache was
+ * screencapping the same device on its own timer — two ~8 MB transfers for the
+ * same picture. Handing the script's frame here removes the second one, and the
+ * thumbnail becomes as fresh as whatever the script is doing.
+ */
+export function thumbnailFromFrame(frame: { width: number; height: number; pixels: Uint8Array }): Buffer {
+  const targetW = Math.min(THUMB_WIDTH, frame.width);
+  const targetH = Math.max(1, Math.round((frame.height * targetW) / frame.width));
+  return encodePng(targetW, targetH, downscale(frame.pixels, frame.width, frame.height, targetW, targetH));
+}
+
 export async function captureThumbnail(adb: Adb): Promise<Buffer | null> {
   const shell = adb.subprocess.shellProtocol;
   if (!shell || !shell.isSupported) return null;

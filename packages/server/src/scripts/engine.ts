@@ -62,6 +62,7 @@ class Stopped extends Error {}
 
 interface Run {
   script: Script;
+  serial: string;
   startedAt: number;
   stepsRun: number;
   stopping: boolean;
@@ -90,11 +91,18 @@ export class ScriptEngine {
   /** Notified the moment a device frees up, so the scheduler can fill it
    * immediately instead of waiting for its next tick. */
   private onIdle: ((serial: string) => void) | undefined;
+  /** Offered every frame a step captures, so the thumbnail cache can ride along
+   * instead of screencapping the same device again on its own timer. */
+  private onFrame: ((serial: string, frame: Frame) => void) | undefined;
 
   constructor(private readonly adbManager: AdbManager) {}
 
   onDeviceIdle(handler: (serial: string) => void): void {
     this.onIdle = handler;
+  }
+
+  onCapture(handler: (serial: string, frame: Frame) => void): void {
+    this.onFrame = handler;
   }
 
   isRunning(serial: string): boolean {
@@ -136,6 +144,7 @@ export class ScriptEngine {
     const { width, height } = await this.frameSize(adb);
     const run: Run = {
       script,
+      serial,
       startedAt: Date.now(),
       stepsRun: 0,
       stopping: false,
@@ -225,7 +234,9 @@ export class ScriptEngine {
    */
   private async pollFrame(run: Run, adb: Adb): Promise<Frame | undefined> {
     try {
-      return await capture(adb);
+      const frame = await capture(adb);
+      this.onFrame?.(run.serial, frame);
+      return frame;
     } catch (error) {
       if (!run.captureWarned) {
         run.captureWarned = true;

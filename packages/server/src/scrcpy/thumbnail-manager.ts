@@ -1,8 +1,11 @@
 import type { AdbManager } from "../adb/adb-manager.js";
-import { captureThumbnail } from "./screenshot.js";
+import { captureThumbnail, thumbnailFromFrame } from "./screenshot.js";
 
 /** Never re-capture a device more than once per this window (coalesce + floor). */
 const CACHE_MIN_INTERVAL_MS = 3_000;
+/** Floor on re-encoding a donated frame. Encoding one costs ~17 ms of the event
+ * loop, and a thumbnail is a glance, not a video. */
+const OFFER_MIN_INTERVAL_MS = 1_000;
 
 interface ThumbEntry {
   png: Buffer;
@@ -46,6 +49,28 @@ export class ThumbnailManager {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  /**
+   * Take a frame someone else already captured and use it as the thumbnail.
+   *
+   * A running script screencaps every poll while this class was screencapping
+   * the same device on its own timer — two ~8 MB transfers of the same picture,
+   * and the expensive half of each. Donating the script's frame removes the
+   * second transfer entirely *and* makes the thumbnail track whatever the script
+   * is looking at, which is the more useful thing to be showing anyway.
+   *
+   * Cheap enough to call on every poll (~17 ms to encode against hundreds of ms
+   * for a capture), but floored anyway — nobody needs a 5 fps thumbnail.
+   */
+  offer(serial: string, frame: { width: number; height: number; pixels: Uint8Array }): void {
+    const cached = this.cache.get(serial);
+    if (cached && Date.now() - cached.at < OFFER_MIN_INTERVAL_MS) return;
+    try {
+      this.cache.set(serial, { png: thumbnailFromFrame(frame), at: Date.now() });
+    } catch {
+      /* a malformed frame is not worth failing the caller's step over */
+    }
   }
 
   /**

@@ -38,6 +38,9 @@ const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1
 const displayManager = new DisplayManager(adbManager, config.dataDir);
 const scriptStore = new ScriptStore(config.dataDir);
 const scriptEngine = new ScriptEngine(adbManager);
+// A script screencaps constantly; let the thumbnail cache ride along on those
+// frames rather than capturing the same device again on its own timer.
+scriptEngine.onCapture((serial, frame) => thumbnailManager.offer(serial, frame));
 const scheduler = new Scheduler(scriptStore, scriptEngine);
 const sessionManager = new SessionManager(
   adbManager,
