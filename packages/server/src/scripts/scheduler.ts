@@ -34,6 +34,10 @@ interface DeviceState {
   lastRunning: string | null;
   /** Earliest time a persistent script may restart after finishing. */
   restartAfter: number;
+  /** Set when the engine could not start on this device — almost always the
+   * device being unreachable. Without it, pressing 執行 on a disconnected phone
+   * does nothing at all and says nothing about why. */
+  unreachable: boolean;
 }
 
 /** `YYYY-M-D` in local time — the key for "already fired today". */
@@ -89,9 +93,10 @@ export class Scheduler {
     this.state(serial).lastHumanInputAt = Date.now();
   }
 
-  /** Queue a script to run now, outranking scheduled/persistent work. */
-  requestRun(script: Script): void {
-    const state = this.state(script.deviceSerial);
+  /** Queue a script to run now on `serial`, outranking scheduled work. A manual
+   * run targets the device you asked from, not the script's scheduled list. */
+  requestRun(script: Script, serial: string): void {
+    const state = this.state(serial);
     state.suppressed.delete(script.id); // asking for it is how a stop is undone
     state.activations.set(script.id, {
       scriptId: script.id,
@@ -139,6 +144,7 @@ export class Scheduler {
     const desired = this.pick(state, running);
     if (!desired) return null;
 
+    if (state.unreachable && !running) return { scriptId: desired.scriptId, reason: "unreachable" };
     if (this.humanActive(serial)) return { scriptId: desired.scriptId, reason: "humanActive" };
     if (running) return { scriptId: desired.scriptId, reason: "outranked" };
     return { scriptId: desired.scriptId, reason: "queued" };
@@ -147,12 +153,14 @@ export class Scheduler {
   overview(): DeviceSchedule[] {
     const now = new Date();
     const bySerial = new Map<string, ScheduleScript[]>();
+    // A script can be scheduled on several devices, so it appears under each.
     for (const script of this.store.list()) {
-      const state = this.devices.get(script.deviceSerial);
-      const running = this.engine.status(script.deviceSerial);
+      for (const serial of script.devices) {
+      const state = this.devices.get(serial);
+      const running = this.engine.status(serial);
       const isRunning = running.scriptId === script.id && running.state !== "idle";
       const waiting = state?.activations.has(script.id) ?? false;
-      const list = bySerial.get(script.deviceSerial) ?? [];
+      const list = bySerial.get(serial) ?? [];
       list.push({
         id: script.id,
         name: script.name,
@@ -163,7 +171,8 @@ export class Scheduler {
         nextRunAt:
           script.enabled && script.trigger.type === "daily" ? nextDailyRun(script.trigger.time, now) : null,
       });
-      bySerial.set(script.deviceSerial, list);
+      bySerial.set(serial, list);
+      }
     }
     return [...bySerial.entries()].map(([serial, scripts]) => ({
       serial,
@@ -177,7 +186,7 @@ export class Scheduler {
   private state(serial: string): DeviceState {
     let state = this.devices.get(serial);
     if (!state) {
-      state = { activations: new Map(), suppressed: new Set(), lastHumanInputAt: 0, lastRunning: null, restartAfter: 0 };
+      state = { activations: new Map(), suppressed: new Set(), lastHumanInputAt: 0, lastRunning: null, restartAfter: 0, unreachable: false };
       this.devices.set(serial, state);
     }
     return state;
@@ -192,7 +201,7 @@ export class Scheduler {
     const now = new Date();
     this.refreshTriggers(now);
 
-    const serials = new Set([...this.devices.keys(), ...this.store.list().map((s) => s.deviceSerial)]);
+    const serials = new Set([...this.devices.keys(), ...this.store.list().flatMap((s) => s.devices)]);
     for (const serial of serials) {
       const state = this.state(serial);
       const status = this.engine.status(serial);
@@ -232,9 +241,16 @@ export class Scheduler {
         state.activations.delete(desired.scriptId);
         continue;
       }
-      await this.engine.start(script).catch(() => {
-        // Device busy or unreachable — try again next tick.
-      });
+      // Keep the activation on failure so it starts as soon as the device comes
+      // back, but remember that it failed so the UI can say why nothing happens.
+      await this.engine
+        .start(script, serial)
+        .then(() => {
+          state.unreachable = false;
+        })
+        .catch(() => {
+          state.unreachable = true;
+        });
     }
   }
 
@@ -244,10 +260,11 @@ export class Scheduler {
     const minutes = now.getHours() * 60 + now.getMinutes();
     for (const script of this.store.list()) {
       if (!script.enabled) {
-        this.devices.get(script.deviceSerial)?.activations.delete(script.id);
+        for (const serial of script.devices) this.devices.get(serial)?.activations.delete(script.id);
         continue;
       }
-      const state = this.state(script.deviceSerial);
+      for (const serial of script.devices) {
+      const state = this.state(serial);
       if (script.trigger.type === "persistent") {
         // A stopped persistent script stays stopped; `firedDays` already keeps
         // a daily one from re-firing, so only this branch needs the check.
@@ -262,6 +279,7 @@ export class Scheduler {
           this.firedDays.add(key);
           state.activations.set(script.id, { scriptId: script.id, priority: script.priority, oneShot: true, since: Date.now() });
         }
+      }
       }
     }
   }

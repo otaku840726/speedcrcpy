@@ -120,8 +120,7 @@ export class ScriptEngine {
   }
 
   /** Start a script. Rejects if the device already has one running. */
-  async start(script: Script): Promise<void> {
-    const serial = script.deviceSerial;
+  async start(script: Script, serial: string): Promise<void> {
     if (this.runs.has(serial)) throw new Error("script already running on this device");
 
     const adb = await this.adbManager.getAdb(serial);

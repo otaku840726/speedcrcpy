@@ -1,4 +1,4 @@
-import { scriptMigrateSteps } from "@speedcrcpy/shared";
+import { scriptMigrateDevices, scriptMigrateSteps } from "@speedcrcpy/shared";
 import type { Script } from "@speedcrcpy/shared";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,14 +14,17 @@ export class ScriptStore {
     if (existsSync(this.path)) {
       try {
         const list = JSON.parse(readFileSync(this.path, "utf8")) as Script[];
-        // Scripts saved before scheduling existed have no trigger/priority.
+        // Older files predate scheduling (no trigger/priority) and predate
+        // scripts being global (a single `deviceSerial` instead of a list).
         for (const s of list) {
+          const { deviceSerial, ...rest } = s as Script & { deviceSerial?: string };
           this.scripts.set(s.id, {
-            ...s,
+            ...rest,
             trigger: s.trigger ?? { type: "manual" },
             priority: s.priority ?? 20,
             enabled: s.enabled ?? true,
             steps: scriptMigrateSteps(s.steps ?? []),
+            devices: scriptMigrateDevices(s).devices,
           });
         }
       } catch {
@@ -32,7 +35,7 @@ export class ScriptStore {
 
   list(serial?: string): Script[] {
     const all = [...this.scripts.values()];
-    return serial ? all.filter((s) => s.deviceSerial === serial) : all;
+    return serial ? all.filter((s) => s.devices.includes(serial)) : all;
   }
 
   get(id: string): Script | undefined {

@@ -1,4 +1,4 @@
-import { PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { type DeviceInfo, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -567,7 +567,17 @@ function AddMenu({ onAdd }: { onAdd: (step: ScriptStep) => void }) {
 
 export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () => void }) {
   const [scripts, setScripts] = useState<Script[]>([]);
-  const [draft, setDraft] = useState<{ id?: string; name: string; steps: ScriptStep[]; trigger: ScriptTrigger; priority: number; enabled: boolean }>();
+  const [draft, setDraft] = useState<{
+    id?: string;
+    name: string;
+    steps: ScriptStep[];
+    trigger: ScriptTrigger;
+    priority: number;
+    enabled: boolean;
+    devices: string[];
+  }>();
+  /** Known devices, so a scheduled script can be pointed at several. */
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [status, setStatus] = useState<ScriptStatus>();
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
@@ -577,8 +587,16 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [starting, setStarting] = useState(false);
 
   const reload = useCallback(async () => {
-    setScripts(await api<Script[]>(`/api/devices/${encodeURIComponent(serial)}/scripts`).catch(() => []));
-  }, [serial]);
+    // Every script, not this device's — a script is a procedure, and which
+    // devices it is scheduled on is a property of the script.
+    setScripts(await api<Script[]>("/api/scripts").catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    void api<DeviceInfo[]>("/api/devices")
+      .then(setDevices)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     void reload();
@@ -606,11 +624,16 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
     if (!draft) return;
     setBusy(true);
     try {
-      const saved = await api<Script>(`/api/devices/${encodeURIComponent(serial)}/scripts`, {
-        method: "POST",
-        body: JSON.stringify(draft),
+      const saved = await api<Script>("/api/scripts", { method: "POST", body: JSON.stringify(draft) });
+      setDraft({
+        id: saved.id,
+        name: saved.name,
+        steps: saved.steps,
+        trigger: saved.trigger,
+        priority: saved.priority,
+        enabled: saved.enabled,
+        devices: saved.devices,
       });
-      setDraft({ id: saved.id, name: saved.name, steps: saved.steps, trigger: saved.trigger, priority: saved.priority, enabled: saved.enabled });
       await reload();
     } finally {
       setBusy(false);
@@ -627,13 +650,15 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   }, [starting, running, status?.pending]);
 
   const waitLabel =
-    status?.pending?.reason === "humanActive"
-      ? "手動操作中,腳本暫讓(停手約 15 秒後自動接手)"
-      : status?.pending?.reason === "outranked"
-        ? `排隊中:等「${status.scriptName ?? "另一支腳本"}」結束`
-        : status?.pending
-          ? "排隊中…"
-          : undefined;
+    status?.pending?.reason === "unreachable"
+      ? "裝置連不上 — 已排入佇列,裝置回來就會執行"
+      : status?.pending?.reason === "humanActive"
+        ? "手動操作中,腳本暫讓(停手約 15 秒後自動接手)"
+        : status?.pending?.reason === "outranked"
+          ? `排隊中:等「${status.scriptName ?? "另一支腳本"}」結束`
+          : status?.pending
+            ? "排隊中…"
+            : undefined;
 
   const activity = running
     ? `執行中:${status?.scriptName ?? ""}${status?.stepsRun ? ` · 第 ${status.stepsRun} 步` : ""}`
@@ -660,7 +685,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
             onClick={() => {
               setError(undefined);
               setStarting(true);
-              void api(`/api/scripts/${draft?.id}/run`, { method: "POST" }).catch((e: unknown) => {
+              void api(`/api/devices/${encodeURIComponent(serial)}/scripts/${draft?.id}/run`, { method: "POST" }).catch((e: unknown) => {
                 setStarting(false);
                 setError(e instanceof Error ? e.message : "執行失敗");
               });
@@ -686,7 +711,19 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
           value={draft?.id ?? ""}
           onChange={(e) => {
             const found = scripts.find((s) => s.id === e.target.value);
-            setDraft(found ? { id: found.id, name: found.name, steps: found.steps, trigger: found.trigger, priority: found.priority, enabled: found.enabled } : undefined);
+            setDraft(
+              found
+                ? {
+                    id: found.id,
+                    name: found.name,
+                    steps: found.steps,
+                    trigger: found.trigger,
+                    priority: found.priority,
+                    enabled: found.enabled,
+                    devices: found.devices,
+                  }
+                : undefined,
+            );
           }}
         >
           <option value="">— 選擇腳本 —</option>
@@ -694,7 +731,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
         </select>
-        <button onClick={() => setDraft({ name: "新腳本", steps: [], trigger: { type: "manual" }, priority: 20, enabled: true })}>新建</button>
+        <button onClick={() => setDraft({ name: "新腳本", steps: [], trigger: { type: "manual" }, priority: 20, enabled: true, devices: [serial] })}>新建</button>
         {draft?.id && (
           <button
             title="刪除腳本"
@@ -747,6 +784,32 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
               </label>
             )}
           </div>
+
+          {draft.trigger.type !== "manual" && (
+            <div className="sp-devices">
+              <span className="muted">排程在</span>
+              {devices.length === 0 && <span className="muted">(沒有已知裝置)</span>}
+              {devices.map((d) => (
+                <label key={d.serial} title={d.serial}>
+                  <input
+                    type="checkbox"
+                    checked={draft.devices.includes(d.serial)}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        devices: e.target.checked
+                          ? [...draft.devices, d.serial]
+                          : draft.devices.filter((x) => x !== d.serial),
+                      })
+                    }
+                  />
+                  {d.name || d.serial}
+                  {d.serial === serial && <span className="muted"> (目前)</span>}
+                </label>
+              ))}
+              {!draft.devices.length && <span className="sp-warn-inline">未選裝置 — 排程不會執行</span>}
+            </div>
+          )}
 
           <div className="sp-steps">
             {draft.steps.map((step, i) => (

@@ -119,7 +119,19 @@ export const PRIORITY_LABELS: { value: number; label: string }[] = [
 
 export interface Script {
   id: string;
-  deviceSerial: string;
+  /**
+   * Devices the scheduler runs this on. A script is a procedure, not a
+   * property of one phone — coordinates are normalized and text matching is
+   * resolution-independent, so the same steps genuinely port across devices.
+   *
+   * Only `persistent` and `daily` consult this; a manual run always targets the
+   * device you pressed 執行 from, whether or not it is listed here.
+   *
+   * Image steps are the exception worth knowing about: template matching is not
+   * scale-invariant, so a script that finds images will miss on a device with a
+   * different resolution than the one the template was captured on.
+   */
+  devices: string[];
   name: string;
   steps: ScriptStep[];
   trigger: ScriptTrigger;
@@ -144,7 +156,9 @@ export type ScriptPendingReason =
   /** Held off because someone is touching the device. */
   | "humanActive"
   /** Another, higher-priority script has the device. */
-  | "outranked";
+  | "outranked"
+  /** The device can't be reached, so the run cannot start at all. */
+  | "unreachable";
 
 export interface ScriptStatus {
   serial: string;
@@ -465,4 +479,11 @@ export function scriptMigrateSteps(steps: ScriptStep[]): ScriptStep[] {
     }
     return next;
   });
+}
+
+/** Scripts saved when they belonged to one device carry `deviceSerial`. */
+export function scriptMigrateDevices<T extends { devices?: string[] }>(script: T & { deviceSerial?: string }): T {
+  if (script.devices) return script;
+  const { deviceSerial, ...rest } = script;
+  return { ...rest, devices: deviceSerial ? [deviceSerial] : [] } as T;
 }

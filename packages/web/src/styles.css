@@ -1401,6 +1401,28 @@ button.tp-swatch:not(:disabled):hover {
 .tp-warn-inline {
   color: #f0a94b;
 }
+/* Which devices a scheduled script runs on. */
+.sp-devices {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  padding: 6px 2px;
+}
+.sp-devices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.sp-devices input[type="checkbox"] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.sp-warn-inline {
+  color: #f0a94b;
+}
 /* Summary of the filter/pick config on the step row itself. */
 .sp-summary {
   font-size: 11px;

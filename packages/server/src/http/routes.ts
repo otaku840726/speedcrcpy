@@ -122,6 +122,7 @@ const TriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("daily"), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }),
 ]);
 const ScriptBody = z.object({
+  devices: z.array(z.string().min(1).max(200)).max(50).default([]),
   id: z.string().optional(),
   name: z.string().min(1).max(60),
   steps: z.array(StepSchema).max(200),
@@ -310,17 +311,16 @@ export function registerRoutes(
     }
   });
 
-  app.get<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request) =>
-    scriptStore.list(request.params.serial),
-  );
+  /** Every script, on every device — a script belongs to no one phone. */
+  app.get("/api/scripts", async () => scriptStore.list());
 
-  app.post<{ Params: { serial: string } }>("/api/devices/:serial/scripts", async (request, reply) => {
+  app.post("/api/scripts", async (request, reply) => {
     const body = ScriptBody.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
-    const saved = scriptStore.save({ ...body.data, deviceSerial: request.params.serial } as never);
+    const saved = scriptStore.save(body.data as never);
     // Editing a script is a fresh intent — in particular, re-enabling one that
     // was stopped should let it be scheduled again.
-    scheduler.resume(saved.id, request.params.serial);
+    for (const serial of saved.devices) scheduler.resume(saved.id, serial);
     return saved;
   });
 
@@ -328,10 +328,12 @@ export function registerRoutes(
     scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" }),
   );
 
-  app.post<{ Params: { id: string } }>("/api/scripts/:id/run", async (request, reply) => {
+  /** Run on the device the caller is looking at, whatever the script's own
+   * scheduled devices are — pressing 執行 means "here, now". */
+  app.post<{ Params: { id: string; serial: string } }>("/api/devices/:serial/scripts/:id/run", async (request, reply) => {
     const script = scriptStore.get(request.params.id);
     if (!script) return reply.code(404).send({ error: "not_found" });
-    scheduler.requestRun(script);
+    scheduler.requestRun(script, request.params.serial);
     return { ok: true };
   });
 
