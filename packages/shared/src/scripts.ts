@@ -221,6 +221,21 @@ export interface ScriptFilter {
   mode?: ScriptTextMode;
   /** Drop reads below this confidence (0-1). OCR junk scores low. */
   minConfidence?: number;
+  /**
+   * Require the text to be this colour, `#rrggbb`, within `colorTolerance`.
+   *
+   * Far more discriminating than the words alone: an enabled button's label
+   * and a greyed-out one read identically, and so do an ordinary item and a
+   * rare one. Set it by clicking the swatch of a candidate that is already the
+   * right colour rather than by guessing a hex value.
+   */
+  color?: string;
+  /** 0-1 of the maximum RGB distance. */
+  colorTolerance?: number;
+  /** Text height as a fraction of the frame, for telling a heading from body
+   * text that happens to say the same thing. */
+  minHeight?: number;
+  maxHeight?: number;
 }
 
 /**
@@ -281,11 +296,32 @@ export interface ScriptCandidate {
   /** The whole recognised band the match sits in — what `mode` is judged on,
    * since the match itself has already been narrowed down to the words. */
   lineText?: string;
+  /** The colour of the glyphs themselves, `#rrggbb` (text candidates only). */
+  color?: string;
+}
+
+/** Largest possible distance between two RGB triples. */
+const MAX_RGB_DISTANCE = Math.sqrt(3 * 255 * 255);
+
+const parseRgb = (hex: string): [number, number, number] | null => {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const n = Number.parseInt(m[1]!, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+};
+
+/** Whether two `#rrggbb` colours are within `tolerance` (0-1) of each other. */
+export function scriptColorMatches(a: string, b: string, tolerance: number): boolean {
+  const x = parseRgb(a);
+  const y = parseRgb(b);
+  if (!x || !y) return false;
+  const d = Math.sqrt((x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2 + (x[2] - y[2]) ** 2);
+  return d / MAX_RGB_DISTANCE <= tolerance;
 }
 
 /** Why a candidate was dropped. The preview shows this; a filter that removes
  * things silently is impossible to debug. */
-export type ScriptRejectReason = "mode" | "confidence";
+export type ScriptRejectReason = "mode" | "confidence" | "color" | "height";
 
 export interface ScriptSelection<T extends ScriptCandidate> {
   /** Survivors, in pick order. */
@@ -369,6 +405,16 @@ function order<T extends ScriptCandidate>(kept: T[], pick: ScriptPick, frame: Sc
   }
 }
 
+/** The first filter a candidate fails, or null when it passes all of them. */
+function rejectionFor(c: ScriptCandidate, needle: string | undefined, f: ScriptFilter): ScriptRejectReason | null {
+  if (needle && c.lineText !== undefined && !scriptTextMatchesMode(c.lineText, needle, f.mode)) return "mode";
+  if (f.minConfidence != null && c.confidence < f.minConfidence) return "confidence";
+  if (f.color && c.color && !scriptColorMatches(c.color, f.color, f.colorTolerance ?? 0.15)) return "color";
+  if (f.minHeight != null && c.h < f.minHeight) return "height";
+  if (f.maxHeight != null && c.h > f.maxHeight) return "height";
+  return null;
+}
+
 /**
  * Filter candidates, order them, and take one — the whole "which of these did
  * you mean" decision in one place so the editor's preview and the engine can
@@ -384,13 +430,9 @@ export function scriptSelect<T extends ScriptCandidate>(
   const rejected: { candidate: T; reason: ScriptRejectReason }[] = [];
   const kept: T[] = [];
   for (const candidate of candidates) {
-    if (needle && candidate.lineText !== undefined && !scriptTextMatchesMode(candidate.lineText, needle, filter.mode)) {
-      rejected.push({ candidate, reason: "mode" });
-    } else if (filter.minConfidence != null && candidate.confidence < filter.minConfidence) {
-      rejected.push({ candidate, reason: "confidence" });
-    } else {
-      kept.push(candidate);
-    }
+    const reason = rejectionFor(candidate, needle, filter);
+    if (reason) rejected.push({ candidate, reason });
+    else kept.push(candidate);
   }
 
   const ordered = order(kept, pick, frame);

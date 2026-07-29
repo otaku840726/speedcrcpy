@@ -35,6 +35,10 @@ const FilterSchema = z
   .object({
     mode: z.enum(["contains", "standalone", "exact"]).optional(),
     minConfidence: norm.optional(),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+    colorTolerance: norm.optional(),
+    minHeight: norm.optional(),
+    maxHeight: norm.optional(),
   })
   .optional();
 const PickSchema = z

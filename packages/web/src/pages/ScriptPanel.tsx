@@ -27,6 +27,8 @@ const ORDER_LABELS: Record<string, string> = {
 function PickSummary({ filter, pick }: { filter?: ScriptFilter; pick?: ScriptPick }) {
   const parts = [
     filter?.mode && filter.mode !== "contains" ? MODE_LABELS[filter.mode] : null,
+    filter?.color ? `色 ${filter.color}` : null,
+    filter?.minHeight || filter?.maxHeight ? "限字高" : null,
     filter?.minConfidence ? `信心 ≥${Math.round(filter.minConfidence * 100)}%` : null,
     pick?.expect === "one" ? "剛好 1 個" : null,
     pick?.by && pick.by !== "reading" ? ORDER_LABELS[pick.by] : null,

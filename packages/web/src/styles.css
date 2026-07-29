@@ -1336,6 +1336,24 @@ option {
   color: var(--text-dim);
   min-width: 40px;
 }
+/* A measured text colour. As a button in the candidate list it adopts that
+   colour as the filter, which beats typing a hex value you had to guess. */
+.tp-swatch {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid #4a545f;
+  display: inline-block;
+}
+button.tp-swatch:not(:disabled):hover {
+  border-color: var(--text);
+  transform: scale(1.15);
+}
+.tp-line .sp-num {
+  width: 58px;
+}
 .tp-val {
   font-variant-numeric: tabular-nums;
 }

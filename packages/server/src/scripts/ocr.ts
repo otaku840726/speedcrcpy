@@ -184,6 +184,70 @@ async function detect(frame: Frame, rect: { x: number; y: number; w: number; h: 
   });
 }
 
+/** Quantise to 4 bits per channel: 4096 buckets, enough to separate glyphs
+ * from their background without splitting antialiased edges into noise. */
+const bucketOf = (r: number, g: number, b: number) => ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+
+/** Distance below which two colours count as the same thing, 0-255 per channel. */
+const INK_DISTANCE = 60;
+
+/**
+ * The colour of the glyphs inside a box.
+ *
+ * A tight text box is mostly background with the letters drawn over it, so the
+ * most common colour is the background and the ink is the next cluster far
+ * enough away from it. Averaging the actual pixels of that cluster — rather
+ * than taking the quantised bucket centre — keeps the answer accurate enough
+ * to compare against a colour picked from another candidate.
+ *
+ * Only meaningful because matches are narrowed to the words: run this on a
+ * whole recognised band and the icon sharing it would dominate. Returns the
+ * background when nothing stands out, which is the honest answer for a box
+ * with no text left in it.
+ */
+function inkColor(frame: Frame, box: PixelLine): string {
+  const r0 = clampRect(frame, { x: box.x - box.w / 2, y: box.y - box.h / 2, w: box.w, h: box.h });
+  const counts = new Map<number, number>();
+  for (let y = r0.y; y < r0.y + r0.h; y++) {
+    for (let x = r0.x; x < r0.x + r0.w; x++) {
+      const i = (y * frame.width + x) * 4;
+      const key = bucketOf(frame.pixels[i]!, frame.pixels[i + 1]!, frame.pixels[i + 2]!);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  let background = 0;
+  let best = -1;
+  for (const [key, n] of counts) if (n > best) ((best = n), (background = key));
+  const bg = [((background >> 8) & 15) * 17, ((background >> 4) & 15) * 17, (background & 15) * 17];
+
+  let ink = background;
+  let inkCount = -1;
+  for (const [key, n] of counts) {
+    const c = [((key >> 8) & 15) * 17, ((key >> 4) & 15) * 17, (key & 15) * 17];
+    const far = Math.sqrt((c[0]! - bg[0]!) ** 2 + (c[1]! - bg[1]!) ** 2 + (c[2]! - bg[2]!) ** 2) >= INK_DISTANCE;
+    if (far && n > inkCount) ((inkCount = n), (ink = key));
+  }
+
+  // Average the real pixels of the chosen bucket — the bucket centre is up to
+  // 8 levels off per channel, which is visible when comparing two greys.
+  let sr = 0;
+  let sg = 0;
+  let sb = 0;
+  let n = 0;
+  for (let y = r0.y; y < r0.y + r0.h; y++) {
+    for (let x = r0.x; x < r0.x + r0.w; x++) {
+      const i = (y * frame.width + x) * 4;
+      if (bucketOf(frame.pixels[i]!, frame.pixels[i + 1]!, frame.pixels[i + 2]!) !== ink) continue;
+      sr += frame.pixels[i]!;
+      sg += frame.pixels[i + 1]!;
+      sb += frame.pixels[i + 2]!;
+      n++;
+    }
+  }
+  const hex = (v: number) => Math.round(v).toString(16).padStart(2, "0");
+  return n ? `#${hex(sr / n)}${hex(sg / n)}${hex(sb / n)}` : "#000000";
+}
+
 const pickHit = (lines: PixelLine[], needle: string): PixelLine | undefined =>
   // Narrowest first: inside `refine` that is the convergence criterion, and the
   // x tiebreak keeps the choice deterministic when two candidates tie.
@@ -297,7 +361,7 @@ export async function recognize(frame: Frame, region?: Region, needle?: string):
       w: l.w / frame.width,
       h: l.h / frame.height,
       confidence: l.confidence,
-      ...(lineText === undefined ? {} : { lineText }),
+      ...(lineText === undefined ? {} : { lineText, color: inkColor(frame, l) }),
     });
 
     // Each match remembers the band it came from: the narrowed box is the words

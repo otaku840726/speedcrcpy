@@ -31,7 +31,7 @@ interface Box {
 
 interface OcrProbe {
   lines: (Box & { text: string; confidence: number })[];
-  matches: (Box & { text: string; confidence: number; lineText?: string })[];
+  matches: (Box & { text: string; confidence: number; lineText?: string; color?: string })[];
   text: string;
   ms: number;
   frameWidth: number;
@@ -81,7 +81,28 @@ const ORDERS: { value: ScriptPickBy; label: string }[] = [
 /** Orders that measure from a point, and so need one to be set. */
 const NEEDS_REF = new Set<ScriptPickBy>(["nearest", "farthest"]);
 
-const REASONS: Record<string, string> = { mode: "前後有字", confidence: "信心度不足" };
+const REASONS: Record<string, string> = {
+  mode: "前後有字",
+  confidence: "信心度不足",
+  color: "顏色不符",
+  height: "字太大或太小",
+};
+
+/** The measured colour of a candidate's glyphs, and a one-click way to make it
+ * the filter — picking a hex value by hand is guesswork, picking the colour of
+ * something already on screen is not. */
+function Swatch({ color, onPick }: { color?: string; onPick?: (hex: string) => void }) {
+  if (!color) return null;
+  return (
+    <button
+      className="tp-swatch"
+      style={{ background: color }}
+      title={onPick ? `${color} — 點擊改用這個顏色過濾` : color}
+      disabled={!onPick}
+      onClick={onPick ? (e) => (e.stopPropagation(), onPick(color)) : undefined}
+    />
+  );
+}
 
 export function TestPreview({
   serial,
@@ -272,6 +293,60 @@ export function TestPreview({
                       ))}
                     </div>
                     <div className="tp-line">
+                      <span className="tp-key">文字色</span>
+                      <label title="只接受這個顏色的文字">
+                        <input
+                          type="checkbox"
+                          checked={!!filter?.color}
+                          onChange={(e) =>
+                            set({
+                              filter: {
+                                color: e.target.checked ? (chosen?.color ?? candidates[0]?.color ?? "#ffffff") : undefined,
+                              },
+                            })
+                          }
+                        />
+                        啟用
+                      </label>
+                      {filter?.color && (
+                        <>
+                          <span className="tp-swatch" style={{ background: filter.color }} />
+                          <span className="tp-val">{filter.color}</span>
+                          <span className="muted">容差</span>
+                          <input
+                            type="range"
+                            min={5}
+                            max={60}
+                            step={5}
+                            value={Math.round((filter.colorTolerance ?? 0.15) * 100)}
+                            onChange={(e) => set({ filter: { colorTolerance: Number(e.target.value) / 100 } })}
+                          />
+                          <span className="tp-val">{Math.round((filter.colorTolerance ?? 0.15) * 100)}%</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="tp-line">
+                      <span className="tp-key">字高</span>
+                      <input
+                        className="sp-num"
+                        placeholder="不限"
+                        value={filter?.minHeight ? Math.round(filter.minHeight * frame.height) : ""}
+                        onChange={(e) =>
+                          set({ filter: { minHeight: Number(e.target.value) ? Number(e.target.value) / frame.height : undefined } })
+                        }
+                      />
+                      <span className="muted">–</span>
+                      <input
+                        className="sp-num"
+                        placeholder="不限"
+                        value={filter?.maxHeight ? Math.round(filter.maxHeight * frame.height) : ""}
+                        onChange={(e) =>
+                          set({ filter: { maxHeight: Number(e.target.value) ? Number(e.target.value) / frame.height : undefined } })
+                        }
+                      />
+                      <span className="muted">px</span>
+                    </div>
+                    <div className="tp-line">
                       <span className="tp-key">信心度</span>
                       <input
                         type="range"
@@ -353,9 +428,15 @@ export function TestPreview({
                   {selection.rejected.length ? `,${selection.rejected.length} 個被濾掉` : ""} · 會點第{" "}
                   {selection.kept.indexOf(chosen) + 1} 個
                 </span>
+              ) : selection.kept.length ? (
+                /* Something matched — the index just points past the end of it,
+                   which is a different problem from nothing matching. */
+                <span className="error-text" style={{ display: "inline" }}>
+                  ✕ 只符合 {selection.kept.length} 個,但設定要取第 {(pick?.index ?? 0) + 1} 個
+                </span>
               ) : (
                 <span className="error-text" style={{ display: "inline" }}>
-                  ✕ 沒有可點的目標{selection.rejected.length ? `(${selection.rejected.length} 個被濾掉)` : ""}
+                  ✕ 沒有符合的目標{selection.rejected.length ? `(${selection.rejected.length} 個被濾掉)` : ""}
                 </span>
               )}
               <span className="muted"> · {probe.ms}ms · {probe.frameWidth}×{probe.frameHeight}</span>
@@ -371,6 +452,7 @@ export function TestPreview({
                     onClick={() => set({ pick: { index: i } })}
                   >
                     <span className="tp-cand-no">{i + 1}</span>
+                    <Swatch color={c.color} onPick={onChange ? (hex) => set({ filter: { color: hex } }) : undefined} />
                     <span className="tp-cand-text">{(c as Candidate).label}</span>
                     <span className="muted">{pct(c.confidence)}</span>
                     {c === chosen && <span className="tp-ok tp-cand-why">→ 會點這個</span>}
@@ -379,6 +461,7 @@ export function TestPreview({
                 {selection.rejected.map(({ candidate, reason }, i) => (
                   <div key={`r${i}`} className="tp-cand-row out">
                     <span className="tp-cand-no">✕</span>
+                    <Swatch color={candidate.color} onPick={onChange ? (hex) => set({ filter: { color: hex } }) : undefined} />
                     <span className="tp-cand-text">{candidate.text ?? (candidate as Candidate).label}</span>
                     <span className="muted">{pct(candidate.confidence)}</span>
                     <span className="tp-cand-why">{REASONS[reason]}</span>
