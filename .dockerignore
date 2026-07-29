@@ -2,6 +2,9 @@
 **/dist
 data
 packages/server/data
+# Fetched by postinstall inside the image; shipping a local copy would make a
+# developer build differ from CI and hide a broken download.
+packages/server/models
 .git
 .github
 .claude

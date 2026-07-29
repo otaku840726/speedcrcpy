@@ -8,11 +8,14 @@ RUN corepack enable
 WORKDIR /app
 
 # Install deps first (cached until a manifest or the lockfile changes).
-# The server's postinstall (fetch-scrcpy-server) downloads scrcpy-server.jar,
-# so this layer needs network — available during `docker build`.
+# The server's postinstall downloads scrcpy-server.jar and the PP-OCRv6 weights,
+# so this layer needs network — available during `docker build`. Its scripts
+# directory has to land before the install, not with the rest of the source:
+# postinstall runs as part of this step and cannot see files copied later.
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/server/package.json ./packages/server/
+COPY packages/server/scripts/ ./packages/server/scripts/
 COPY packages/web/package.json ./packages/web/
 RUN pnpm install --frozen-lockfile
 
