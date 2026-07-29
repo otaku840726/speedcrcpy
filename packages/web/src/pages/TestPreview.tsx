@@ -1,11 +1,25 @@
-import { scriptTextKey, type ScriptRegion, type ScriptTemplate } from "@speedcrcpy/shared";
-import { useEffect, useState } from "react";
+import {
+  type ScriptCandidate,
+  type ScriptFilter,
+  type ScriptPick,
+  type ScriptPickBy,
+  type ScriptRegion,
+  type ScriptTemplate,
+  type ScriptTextMode,
+  scriptSelect,
+} from "@speedcrcpy/shared";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 
 /**
- * Shows what a vision step would actually do, on the exact frame the probe ran
- * on: the scanned region, what was found, and — the point of the whole thing —
- * where the tap would land.
+ * Configure a vision step against the frame it will run on.
+ *
+ * Every option here — which matches count, which one to act on — is meaningless
+ * without seeing the candidates, so configuration and verification share one
+ * screen rather than being a settings row plus a separate preview. The probe
+ * returns candidates *unfiltered*; filtering runs client-side through the same
+ * `scriptSelect` the engine uses, so the settings respond instantly without
+ * another capture and the two can never disagree about the outcome.
  */
 
 interface Box {
@@ -17,12 +31,7 @@ interface Box {
 
 interface OcrProbe {
   lines: (Box & { text: string; confidence: number })[];
-  /** Every place the step's text was found, in reading order — the matching
-   * words, not the line they share with an icon. Computed server-side so the
-   * preview and the engine cannot disagree about where a tap lands. */
-  matches: (Box & { text: string })[];
-  /** The one `occurrence` selects. */
-  tap: (Box & { text: string }) | null;
+  matches: (Box & { text: string; confidence: number; lineText?: string })[];
   text: string;
   ms: number;
   frameWidth: number;
@@ -32,8 +41,8 @@ interface OcrProbe {
 
 interface MatchProbe extends Box {
   score: number;
-  /** Every place the template passed the threshold, in reading order. */
-  matches: (Box & { score: number })[];
+  confidence: number;
+  matches: (Box & { score: number; confidence: number })[];
   ms: number;
   frameWidth: number;
   frameHeight: number;
@@ -43,47 +52,50 @@ interface MatchProbe extends Box {
   suggestedThreshold: number;
 }
 
-/** `selectable` marks the steps that actually act on one match (tapText /
- * findTap) — the if-steps only ask whether anything matched, so offering to
- * choose between candidates there would be meaningless. */
-export type TestTarget = { selectable?: boolean } & (
-  | { kind: "ocr"; region?: ScriptRegion; text?: string; occurrence?: number }
-  | { kind: "match"; region?: ScriptRegion; template: ScriptTemplate; threshold: number; occurrence?: number }
-);
+export type TestTarget =
+  | { kind: "ocr"; region?: ScriptRegion; text?: string }
+  | { kind: "match"; region?: ScriptRegion; template: ScriptTemplate; threshold: number };
+
+type Candidate = ScriptCandidate & { label: string };
 
 const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
-/** Same normalization the engine matches with — see scriptTextKey. */
-const strip = scriptTextKey;
 
-/** Says which of several candidates the step will act on. Silent when there is
- * only one, so the note appears exactly when the choice actually matters. */
-function Choice({ count, chosen, pickable }: { count: number; chosen: number; pickable: boolean }) {
-  if (count < 2) return null;
-  return (
-    <div className="tp-choice">
-      畫面上有 <b>{count}</b> 個符合,目前會點<b>第 {chosen + 1} 個</b>
-      <span className="muted">
-        {" "}
-        · 由上而下、同一列由左而右編號{pickable ? " · 點畫面上的編號可改選" : ""}
-      </span>
-    </div>
-  );
-}
+const MODES: { value: ScriptTextMode; label: string; hint: string }[] = [
+  { value: "contains", label: "包含", hint: "只要出現在辨識到的文字裡就算" },
+  { value: "standalone", label: "前後無字", hint: "必須是獨立的一段,前後不能有其他字" },
+  { value: "exact", label: "整行相符", hint: "整行辨識結果必須完全等於它" },
+];
+
+const ORDERS: { value: ScriptPickBy; label: string }[] = [
+  { value: "reading", label: "由上而下" },
+  { value: "left", label: "最左邊起" },
+  { value: "right", label: "最右邊起" },
+  { value: "top", label: "最上面起" },
+  { value: "bottom", label: "最下面起" },
+  { value: "score", label: "最像的起" },
+  { value: "random", label: "隨機" },
+];
+
+const REASONS: Record<string, string> = { mode: "前後有字", confidence: "信心度不足" };
 
 export function TestPreview({
   serial,
   target,
+  filter,
+  pick,
+  onChange,
   onClose,
   onSuggestThreshold,
-  onPickOccurrence,
 }: {
   serial: string;
   target: TestTarget;
+  filter: ScriptFilter | undefined;
+  pick: ScriptPick | undefined;
+  /** Absent for the if-steps, which only ask whether anything matched and so
+   * have no single target to configure. */
+  onChange?: (filter: ScriptFilter, pick: ScriptPick) => void;
   onClose: () => void;
   onSuggestThreshold?: (value: number) => void;
-  /** Makes the numbered candidates clickable; only used when the target is
-   * `selectable`. */
-  onPickOccurrence?: (index: number) => void;
 }) {
   const [ocr, setOcr] = useState<OcrProbe>();
   const [match, setMatch] = useState<MatchProbe>();
@@ -96,7 +108,7 @@ export function TestPreview({
     const path = target.kind === "ocr" ? "ocr" : "match";
     const body =
       target.kind === "ocr"
-        ? { region: target.region, text: target.text, occurrence: target.occurrence }
+        ? { region: target.region, text: target.text }
         : { region: target.region, template: target.template, threshold: target.threshold };
     api<OcrProbe & MatchProbe>(`/api/devices/${encodeURIComponent(serial)}/${path}`, {
       method: "POST",
@@ -109,27 +121,35 @@ export function TestPreview({
   useEffect(run, [serial]);
 
   const probe = ocr ?? match;
-  const region = target.region;
-  /** The step's match text, when this is a text step (narrowed once here). */
   const wanted = target.kind === "ocr" ? target.text : undefined;
-  /** Candidates the step could aim at, in the same reading order the engine
-   * counts — index 0 is what `occurrence` defaults to. */
-  const candidates: (Box & { label: string })[] =
-    target.kind === "ocr"
-      ? (ocr?.matches ?? []).map((m) => ({ ...m, label: m.text }))
-      : (match?.matches ?? []).map((m) => ({ ...m, label: pct(m.score) }));
-  const chosen = Math.min(target.occurrence ?? 0, Math.max(0, candidates.length - 1));
-  const pick = target.selectable ? onPickOccurrence : undefined;
-  const hit = candidates[chosen];
-  const tapX = hit?.x;
-  const tapY = hit?.y;
+  const set = (next: { filter?: ScriptFilter; pick?: ScriptPick }) =>
+    onChange?.({ ...filter, ...next.filter }, { ...pick, ...next.pick });
+
+  // Re-filtering is pure — no capture, no round trip — so dragging the
+  // confidence slider redraws the boxes as fast as it moves.
+  const candidates: Candidate[] = useMemo(
+    () =>
+      target.kind === "ocr"
+        ? (ocr?.matches ?? []).map((m) => ({ ...m, label: m.text }))
+        : (match?.matches ?? []).map((m) => ({ ...m, label: pct(m.score) })),
+    [ocr, match, target.kind],
+  );
+  const selection = useMemo(() => scriptSelect(candidates, wanted, filter, pick), [candidates, wanted, filter, pick]);
+  const chosen = selection.chosen;
+
+  const boxStyle = (b: Box) => ({
+    left: `${(b.x - b.w / 2) * 100}%`,
+    top: `${(b.y - b.h / 2) * 100}%`,
+    width: `${b.w * 100}%`,
+    height: `${b.h * 100}%`,
+  });
 
   return (
     <div className="picker-backdrop" onClick={onClose}>
       <div className="picker-box tp-box" onClick={(e) => e.stopPropagation()}>
         <div className="picker-head">
           <span>
-            {target.kind === "ocr" ? "辨識結果預覽" : "找圖測試"}
+            {target.kind === "ocr" ? "依文字點擊 · 設定與測試" : "找圖 · 設定與測試"}
             <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
               綠色十字 = 實際會點擊的位置
             </span>
@@ -141,151 +161,214 @@ export function TestPreview({
         </div>
 
         {error && <p className="error-text" style={{ padding: "8px 4px" }}>{error}</p>}
+        {!probe && !error && <p className="muted" style={{ padding: "8px 4px" }}>正在抓取畫面…</p>}
 
         {probe && (
-          <div className="tp-stage">
-            <img src={`data:image/png;base64,${probe.preview}`} alt="" />
+          <div className="tp-work">
+            <div className="tp-stage">
+              <img src={`data:image/png;base64,${probe.preview}`} alt="" />
 
-            {/* Scanned region; everything outside it is dimmed. */}
-            {region && (
-              <div
-                className="tp-region"
-                style={{
-                  left: `${region.x * 100}%`,
-                  top: `${region.y * 100}%`,
-                  width: `${region.w * 100}%`,
-                  height: `${region.h * 100}%`,
-                }}
-              />
-            )}
+              {target.region && <div className="tp-region" style={boxStyle(target.region)} />}
 
-            {/* Everything OCR recognised, so a near-miss is visible too. */}
-            {ocr?.lines.map((line, i) => (
-              <div
-                key={i}
-                className="tp-box-outline"
-                style={{
-                  left: `${(line.x - line.w / 2) * 100}%`,
-                  top: `${(line.y - line.h / 2) * 100}%`,
-                  width: `${line.w * 100}%`,
-                  height: `${line.h * 100}%`,
-                }}
-                title={`${line.text} · ${pct(line.confidence)}`}
-              />
-            ))}
-
-            {/* Nothing passed the threshold: show the near miss so the author
-                can see what the score was actually measuring. */}
-            {match && !candidates.length && (
-              <div
-                className="tp-box-outline miss"
-                style={{
-                  left: `${(match.x - match.w / 2) * 100}%`,
-                  top: `${(match.y - match.h / 2) * 100}%`,
-                  width: `${match.w * 100}%`,
-                  height: `${match.h * 100}%`,
-                }}
-              />
-            )}
-
-            {/* The candidates, numbered in the order the engine counts them.
-                Which one gets tapped is a choice, so make it a visible one. */}
-            {candidates.map((c, i) => (
-              <div
-                key={i}
-                className={`tp-box-outline tp-cand${i === chosen ? " hit tp-refined" : ""}${pick ? " pickable" : ""}`}
-                style={{
-                  left: `${(c.x - c.w / 2) * 100}%`,
-                  top: `${(c.y - c.h / 2) * 100}%`,
-                  width: `${c.w * 100}%`,
-                  height: `${c.h * 100}%`,
-                }}
-                title={`第 ${i + 1} 個 · ${c.label}`}
-                onClick={pick ? () => pick(i) : undefined}
-              >
-                {candidates.length > 1 && <span className="tp-cand-no">{i + 1}</span>}
-              </div>
-            ))}
-
-            {tapX !== undefined && tapY !== undefined && (
-              <>
-                <div className="tp-cross" style={{ left: `${tapX * 100}%`, top: `${tapY * 100}%` }} />
-                {/* Pixels only — the preview is narrow, and a longer label gets
-                    clipped at the edge. The normalized pair is in the footer. */}
+              {ocr?.lines.map((line, i) => (
                 <div
-                  className={`tp-taplab${tapX > 0.5 ? " flip" : ""}`}
-                  style={{ left: `${tapX * 100}%`, top: `${tapY * 100}%` }}
-                >
-                  {Math.round(tapX * probe.frameWidth)},{Math.round(tapY * probe.frameHeight)}
+                  key={i}
+                  className="tp-box-outline"
+                  style={boxStyle(line)}
+                  title={`${line.text} · ${pct(line.confidence)}`}
+                />
+              ))}
+
+              {/* Filtered out, but still drawn: a filter that removes matches
+                  invisibly turns "找不到" into guesswork. */}
+              {selection.rejected.map(({ candidate, reason }, i) => (
+                <div key={`x${i}`} className="tp-box-outline tp-cand out" style={boxStyle(candidate)} title={REASONS[reason]}>
+                  <span className="tp-cand-no">✕</span>
                 </div>
-              </>
+              ))}
+
+              {selection.kept.map((candidate, i) => (
+                <div
+                  key={i}
+                  className={`tp-box-outline tp-cand${candidate === chosen ? " hit tp-refined" : ""}${onChange ? " pickable" : ""}`}
+                  style={boxStyle(candidate)}
+                  title={`第 ${i + 1} 個 · ${(candidate as Candidate).label}`}
+                  onClick={onChange ? () => set({ pick: { index: i } }) : undefined}
+                >
+                  {selection.kept.length > 1 && <span className="tp-cand-no">{i + 1}</span>}
+                </div>
+              ))}
+
+              {chosen && (
+                <>
+                  <div className="tp-cross" style={{ left: `${chosen.x * 100}%`, top: `${chosen.y * 100}%` }} />
+                  <div
+                    className={`tp-taplab${chosen.x > 0.5 ? " flip" : ""}`}
+                    style={{ left: `${chosen.x * 100}%`, top: `${chosen.y * 100}%` }}
+                  >
+                    {Math.round(chosen.x * probe.frameWidth)},{Math.round(chosen.y * probe.frameHeight)}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {onChange && (
+              <div className="tp-config">
+                {target.kind === "ocr" && (
+                  <div className="tp-group">
+                    <h4>哪些算數</h4>
+                    <div className="tp-line">
+                      <span className="tp-key">比對</span>
+                      {MODES.map((m) => (
+                        <label key={m.value} title={m.hint}>
+                          <input
+                            type="radio"
+                            checked={(filter?.mode ?? "contains") === m.value}
+                            onChange={() => set({ filter: { mode: m.value } })}
+                          />
+                          {m.label}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="tp-line">
+                      <span className="tp-key">信心度</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={90}
+                        step={10}
+                        value={Math.round((filter?.minConfidence ?? 0) * 100)}
+                        onChange={(e) => set({ filter: { minConfidence: Number(e.target.value) / 100 } })}
+                      />
+                      <span className="tp-val">≥ {Math.round((filter?.minConfidence ?? 0) * 100)}%</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="tp-group">
+                  <h4>挑哪一個</h4>
+                  <div className="tp-line">
+                    <span className="tp-key">數量</span>
+                    <label title="有幾個都行,照下面的順序取">
+                      <input
+                        type="radio"
+                        checked={(pick?.expect ?? "any") === "any"}
+                        onChange={() => set({ pick: { expect: "any" } })}
+                      />
+                      任意
+                    </label>
+                    <label title="超過一個就當作誤判,繼續等到畫面穩定">
+                      <input type="radio" checked={pick?.expect === "one"} onChange={() => set({ pick: { expect: "one" } })} />
+                      必須剛好 1 個
+                    </label>
+                  </div>
+                  <div className="tp-line">
+                    <span className="tp-key">排序</span>
+                    <select value={pick?.by ?? "reading"} onChange={(e) => set({ pick: { by: e.target.value as ScriptPickBy } })}>
+                      {ORDERS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="muted">取第</span>
+                    <input
+                      className="sp-num"
+                      value={(pick?.index ?? 0) + 1}
+                      onChange={(e) => set({ pick: { index: Math.max(0, (Number(e.target.value) || 1) - 1) } })}
+                    />
+                    <span className="muted">個</span>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
 
-        {ocr && (
+        {probe && (
           <div className="tp-foot">
             <div>
-              {wanted ? (
-                hit ? (
-                  <span className="tp-ok">
-                    ✓ 找到符合「{wanted}」的文字
-                    {strip(hit.label) !== strip(wanted) ? ` — 已收窄到「${hit.label}」` : ""}
-                    <span className="muted">
-                      {" "}
-                      · 點擊 ({hit.x.toFixed(3)}, {hit.y.toFixed(3)})
-                    </span>
-                  </span>
-                ) : (
-                  <span className="error-text" style={{ display: "inline" }}>
-                    ✕ 沒有符合「{wanted}」的文字 — 請照下方實際讀到的內容調整
-                  </span>
-                )
+              {selection.unsettled ? (
+                <span className="tp-warn-inline">
+                  ⚠ 符合 {selection.kept.length} 個,但設定為必須剛好 1 個 — 執行時會繼續等
+                </span>
+              ) : chosen ? (
+                <span className="tp-ok">
+                  ✓ 符合 {selection.kept.length} 個
+                  {selection.rejected.length ? `,${selection.rejected.length} 個被濾掉` : ""} · 會點第{" "}
+                  {selection.kept.indexOf(chosen) + 1} 個
+                </span>
               ) : (
-                <span className="muted">辨識完成</span>
+                <span className="error-text" style={{ display: "inline" }}>
+                  ✕ 沒有可點的目標{selection.rejected.length ? `(${selection.rejected.length} 個被濾掉)` : ""}
+                </span>
               )}
-              <span className="muted"> · {ocr.ms}ms · {ocr.frameWidth}×{ocr.frameHeight}</span>
+              <span className="muted"> · {probe.ms}ms · {probe.frameWidth}×{probe.frameHeight}</span>
             </div>
-            <Choice count={candidates.length} chosen={chosen} pickable={!!pick} />
-            <div className="tp-read">
-              <span className="muted">讀到:</span> {ocr.text || "(沒讀到文字)"}
-            </div>
-          </div>
-        )}
 
-        {match && target.kind === "match" && (
-          <div className="tp-foot">
-            <div className="tp-cmp">
-              <figure>
-                <img src={`data:image/png;base64,${target.template.png}`} alt="" />
-                <figcaption>模板</figcaption>
-              </figure>
-              <span className="tp-arrow">→</span>
-              <figure>
-                <img className={hit ? "hit" : ""} src={`data:image/png;base64,${match.crop}`} alt="" />
-                <figcaption>畫面上</figcaption>
-              </figure>
-              <div className="tp-bar">
-                <div className="tp-barline">
-                  <div className={`tp-fill${hit ? " hit" : ""}`} style={{ width: pct(match.score) }} />
-                  <div className="tp-thr" style={{ left: pct(target.threshold) }} />
-                </div>
-                <div className="tp-score">
-                  <span className={hit ? "tp-ok" : "error-text"} style={{ display: "inline" }}>
-                    相似度 {pct(match.score)} {hit ? "✓ 通過" : `✕ 未達門檻 ${pct(target.threshold)}`}
-                  </span>
-                  <span className="muted">{match.ms}ms</span>
-                </div>
-              </div>
-            </div>
-            <Choice count={candidates.length} chosen={chosen} pickable={!!pick} />
-            {onSuggestThreshold && (
-              <div className="tp-suggest">
-                <span className="muted">建議門檻 {pct(match.suggestedThreshold)}</span>
-                <button onClick={() => onSuggestThreshold(match.suggestedThreshold)}>套用</button>
+            {(selection.kept.length > 0 || selection.rejected.length > 0) && (
+              <div className="tp-cands">
+                {selection.kept.map((c, i) => (
+                  <button
+                    key={`k${i}`}
+                    className={`tp-cand-row${c === chosen ? " sel" : ""}`}
+                    disabled={!onChange}
+                    onClick={() => set({ pick: { index: i } })}
+                  >
+                    <span className="tp-cand-no">{i + 1}</span>
+                    <span className="tp-cand-text">{(c as Candidate).label}</span>
+                    <span className="muted">{pct(c.confidence)}</span>
+                    {c === chosen && <span className="tp-ok tp-cand-why">→ 會點這個</span>}
+                  </button>
+                ))}
+                {selection.rejected.map(({ candidate, reason }, i) => (
+                  <div key={`r${i}`} className="tp-cand-row out">
+                    <span className="tp-cand-no">✕</span>
+                    <span className="tp-cand-text">{candidate.text ?? (candidate as Candidate).label}</span>
+                    <span className="muted">{pct(candidate.confidence)}</span>
+                    <span className="tp-cand-why">{REASONS[reason]}</span>
+                  </div>
+                ))}
               </div>
             )}
-            {match.scaleMismatch && (
+
+            {ocr && (
+              <div className="tp-read">
+                <span className="muted">讀到:</span> {ocr.text || "(沒讀到文字)"}
+              </div>
+            )}
+
+            {match && target.kind === "match" && (
+              <div className="tp-cmp">
+                <figure>
+                  <img src={`data:image/png;base64,${target.template.png}`} alt="" />
+                  <figcaption>模板</figcaption>
+                </figure>
+                <span className="tp-arrow">→</span>
+                <figure>
+                  <img className={chosen ? "hit" : ""} src={`data:image/png;base64,${match.crop}`} alt="" />
+                  <figcaption>畫面上</figcaption>
+                </figure>
+                <div className="tp-bar">
+                  <div className="tp-barline">
+                    <div className={`tp-fill${chosen ? " hit" : ""}`} style={{ width: pct(match.score) }} />
+                    <div className="tp-thr" style={{ left: pct(target.threshold) }} />
+                  </div>
+                  <div className="tp-score">
+                    <span className={chosen ? "tp-ok" : "error-text"} style={{ display: "inline" }}>
+                      最佳相似度 {pct(match.score)} · 門檻 {pct(target.threshold)}
+                    </span>
+                    {onSuggestThreshold && (
+                      <button onClick={() => onSuggestThreshold(match.suggestedThreshold)}>
+                        套用建議 {pct(match.suggestedThreshold)}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {match?.scaleMismatch && (
               <div className="tp-warn">
                 ⚠ 模板擷取於 {match.scaleMismatch.captured},目前 {match.scaleMismatch.now} — 找圖不抗縮放,建議重新框選
               </div>

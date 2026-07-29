@@ -1,3 +1,4 @@
+import { scriptMigrateSteps } from "@speedcrcpy/shared";
 import type { Script } from "@speedcrcpy/shared";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -20,6 +21,7 @@ export class ScriptStore {
             trigger: s.trigger ?? { type: "manual" },
             priority: s.priority ?? 20,
             enabled: s.enabled ?? true,
+            steps: scriptMigrateSteps(s.steps ?? []),
           });
         }
       } catch {

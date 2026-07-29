@@ -1,4 +1,5 @@
 import type { Adb } from "@yume-chan/adb";
+import type { ScriptCandidate } from "@speedcrcpy/shared";
 import { PNG } from "pngjs";
 
 /**
@@ -87,15 +88,10 @@ export function parseHex(hex: string): Rgb {
   };
 }
 
-export interface MatchResult {
-  /** Best score, 0-1 (TM_CCOEFF_NORMED). */
+export interface MatchResult extends ScriptCandidate {
+  /** Best score, 0-1 (TM_CCOEFF_NORMED). Same value as `confidence`, kept
+   * because "score" is what a template match is called everywhere else. */
   score: number;
-  /** Centre of the best match, normalized 0-1 (only meaningful when matched). */
-  x: number;
-  y: number;
-  /** Size of the match (= the template), normalized — lets a UI draw the box. */
-  w: number;
-  h: number;
   /**
    * Every place the template scored at or above the requested threshold, in
    * reading order — a screen often holds several copies of the same button, and
@@ -205,6 +201,7 @@ export async function findTemplate(
   const needleRows = needle.rows;
   const hit = (px: number, py: number, score: number): MatchHit => ({
     score,
+    confidence: score,
     x: (offsetX + px + needleCols / 2) / frame.width,
     y: (offsetY + py + needleRows / 2) / frame.height,
     w: needleCols / frame.width,

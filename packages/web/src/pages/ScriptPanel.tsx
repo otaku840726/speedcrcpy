@@ -1,4 +1,4 @@
-import { PRIORITY_LABELS, type Script, type ScriptKey, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -6,6 +6,33 @@ import { TestPreview, type TestTarget } from "./TestPreview";
 
 /** Where a step lives in the (nested) tree: child indexes plus which branch. */
 type Path = { index: number; branch?: "body" | "then" | "else" }[];
+
+const MODE_LABELS: Record<string, string> = { standalone: "前後無字", exact: "整行相符" };
+const ORDER_LABELS: Record<string, string> = {
+  left: "最左起",
+  right: "最右起",
+  top: "最上起",
+  bottom: "最下起",
+  score: "最像的起",
+  random: "隨機",
+};
+
+/**
+ * What the step will do about several matches, on the step row itself. Silent
+ * while everything is default, so a step that doesn't use any of this looks
+ * exactly as it did before.
+ */
+function PickSummary({ filter, pick }: { filter?: ScriptFilter; pick?: ScriptPick }) {
+  const parts = [
+    filter?.mode && filter.mode !== "contains" ? MODE_LABELS[filter.mode] : null,
+    filter?.minConfidence ? `信心 ≥${Math.round(filter.minConfidence * 100)}%` : null,
+    pick?.expect === "one" ? "剛好 1 個" : null,
+    pick?.by && pick.by !== "reading" ? ORDER_LABELS[pick.by] : null,
+    pick?.index ? `第 ${pick.index + 1} 個` : null,
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  return <span className="sp-summary">{parts.join(" · ")}</span>;
+}
 
 const KEY_LABELS: Record<string, string> = {
   back: "返回",
@@ -96,7 +123,7 @@ interface PickResult {
 function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickMode; onPick: (r: PickResult) => void; onClose: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<{ target: TestTarget; path: Path }>();
+  const [test, setTest] = useState<{ target: TestTarget; path: Path; selectable: boolean; filter?: ScriptFilter; pick?: ScriptPick }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
@@ -281,7 +308,7 @@ function StepRow({
   onMove: (path: Path, dir: -1 | 1) => void;
   onAdd: (path: Path, branch: "body" | "then" | "else", step: ScriptStep) => void;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
-  probe: (target: TestTarget, path: Path) => void;
+  probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
 }) {
   const set = (patch: Partial<ScriptStep>) => onChange(path, { ...step, ...patch } as ScriptStep);
   const num = (v: string) => Number(v) || 0;
@@ -375,16 +402,16 @@ function StepRow({
                   region: step.region,
                   template: step.template,
                   threshold: step.threshold,
-                  selectable: step.type === "findTap",
-                  occurrence: step.type === "findTap" ? step.occurrence : undefined,
                 },
                 path,
+                step,
               )
             }
             title={step.template.png ? "測試:看比對到哪裡、相似度多少" : "請先框選圖像"}
           >
-            測試
+            設定與測試
           </button>
+          {step.type === "findTap" && <PickSummary filter={step.filter} pick={step.pick} />}
           {step.type === "findTap" && (
             <>
               逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
@@ -436,18 +463,18 @@ function StepRow({
                     kind: "ocr",
                     region: step.region,
                     text: step.text,
-                    selectable: step.type === "tapText",
-                    occurrence: step.type === "tapText" ? step.occurrence : undefined,
                   },
                   path,
+                  step,
                 )
               }
               title="測試:看實際讀到什麼、會點在哪裡"
             >
-              測試
+              設定與測試
             </button>
             {step.type === "tapText" && (
               <>
+                <PickSummary filter={step.filter} pick={step.pick} />
                 逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
               </>
             )}
@@ -541,7 +568,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
   const [error, setError] = useState<string>();
-  const [test, setTest] = useState<{ target: TestTarget; path: Path }>();
+  const [test, setTest] = useState<{ target: TestTarget; path: Path; selectable: boolean; filter?: ScriptFilter; pick?: ScriptPick }>();
   /** Set the moment 執行 is clicked so the UI responds before the server does. */
   const [starting, setStarting] = useState(false);
 
@@ -728,7 +755,15 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
                 onAdd={(p, branch, step) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(step)))}
                 pick={(mode, apply) => setPicker({ mode, apply })}
-                probe={(target, path) => setTest({ target, path })}
+                probe={(target, path, step) =>
+                  setTest({
+                    target,
+                    path,
+                    selectable: step.type === "tapText" || step.type === "findTap",
+                    filter: "filter" in step ? step.filter : undefined,
+                    pick: "pick" in step ? step.pick : undefined,
+                  })
+                }
               />
             ))}
             <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} />
@@ -765,14 +800,20 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 }
               : undefined
           }
-          onPickOccurrence={(index) => {
-            editSteps((s) => editList(s, test.path, (list, i) =>
-              list.map((step, j) => (j === i ? ({ ...step, occurrence: index } as ScriptStep) : step)),
-            ));
-            // Keep the preview open on the same frame — it already holds every
-            // candidate, so this is just a change of highlight.
-            setTest({ ...test, target: { ...test.target, occurrence: index } });
-          }}
+          filter={test.filter}
+          pick={test.pick}
+          onChange={
+            test.selectable
+              ? (filter, pick) => {
+                  editSteps((s) => editList(s, test.path, (list, i) =>
+                    list.map((step, j) => (j === i ? ({ ...step, filter, pick } as ScriptStep) : step)),
+                  ));
+                  // The probe already holds every candidate, so re-filtering is
+                  // instant — keep the modal on the same frame.
+                  setTest({ ...test, filter, pick });
+                }
+              : undefined
+          }
         />
       )}
 

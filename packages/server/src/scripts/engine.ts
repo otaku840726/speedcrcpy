@@ -1,3 +1,9 @@
+import {
+  type ScriptCandidate,
+  type ScriptPick,
+  type ScriptSelection,
+  scriptSelect,
+} from "@speedcrcpy/shared";
 import type {
   Script,
   ScriptKey,
@@ -176,10 +182,26 @@ export class ScriptEngine {
     }
   }
 
-  /** "(2 個中的第 1 個)" — silent when there was only ever one candidate, so
-   * the log stays quiet until ambiguity is actually in play. */
-  private nth(total: number, occurrence: number | undefined): string {
-    return total > 1 ? `(${total} 個中的第 ${(occurrence ?? 0) + 1} 個)` : "";
+  /** "(3 個中的第 2 個)" — silent when there was only ever one candidate, so
+   * the log stays quiet until ambiguity is actually in play. `random` always
+   * says which one it landed on, or a surprise is unexplainable after the fact. */
+  private nth(pick: ScriptSelection<ScriptCandidate>, config: ScriptPick | undefined): string {
+    const index = (config?.index ?? 0) + 1;
+    if (config?.by === "random") return `(隨機取 ${pick.kept.length} 個中的第 ${pick.kept.indexOf(pick.chosen!) + 1} 個)`;
+    return pick.kept.length > 1 ? `(${pick.kept.length} 個中的第 ${index})` : "";
+  }
+
+  /** Why nothing was acted on — a filter that eats a match silently is
+   * impossible to debug from a log. */
+  private why(pick: ScriptSelection<ScriptCandidate>, read: string): string {
+    if (pick.unsettled) return `讀到 ${pick.kept.length} 個,但設定為必須剛好 1 個`;
+    if (pick.kept.length) return `符合 ${pick.kept.length} 個,取不到指定的第幾個`;
+    if (pick.rejected.length) {
+      const modes = pick.rejected.filter((r) => r.reason === "mode").length;
+      const low = pick.rejected.length - modes;
+      return `${pick.rejected.length} 個被濾掉(前後有字 ${modes}、信心度不足 ${low})`;
+    }
+    return `讀到:${read.slice(0, 40) || "(空)"}`;
   }
 
   /** Vision steps already hold a frame — resync the mapping so a rotation
@@ -275,20 +297,20 @@ export class ScriptEngine {
           this.syncSize(run, frame);
           this.warnTemplateScale(run, step.template, frame.width, frame.height);
           const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
-          const pick = match.matches[step.occurrence ?? 0];
-          if (pick) {
-            const nx = pick.x + (step.offsetX ?? 0);
-            const ny = pick.y + (step.offsetY ?? 0);
+          const sel = scriptSelect(match.matches, undefined, step.filter, step.pick);
+          if (sel.chosen) {
+            const nx = sel.chosen.x + (step.offsetX ?? 0);
+            const ny = sel.chosen.y + (step.offsetY ?? 0);
             const [px, py] = this.toPixels(run, nx, ny);
             await sh(adb, `input tap ${px} ${py}`);
-            this.log(run, `找圖命中 ${this.nth(match.matches.length, step.occurrence)} ${(pick.score * 100).toFixed(0)}% → 點擊 ${px},${py}`);
+            this.log(run, `找圖命中 ${this.nth(sel, step.pick)} ${(sel.chosen.confidence * 100).toFixed(0)}% → 點擊 ${px},${py}`);
             return;
           }
           if (Date.now() >= deadline) {
             this.log(
               run,
               match.matches.length
-                ? `找圖逾時:只找到 ${match.matches.length} 個,取不到第 ${(step.occurrence ?? 0) + 1} 個`
+                ? `找圖逾時 · ${this.why(sel, "")}`
                 : `找圖逾時(最佳 ${(match.score * 100).toFixed(0)}% < ${(step.threshold * 100).toFixed(0)}%)`,
             );
             return;
@@ -312,25 +334,19 @@ export class ScriptEngine {
           this.checkStop(run);
           const frame = await capture(adb);
           this.syncSize(run, frame);
-          // `tap` is the matched words, narrowed down from the line they sit on
-          // — OCR merges a whole horizontal band (icon and all) into one box.
-          const result = await recognize(frame, step.region, { needle: step.text, occurrence: step.occurrence });
-          if (result.tap) {
-            const [px, py] = this.toPixels(run, result.tap.x, result.tap.y);
+          // Matches are the words themselves, narrowed down from the band they
+          // sit in — OCR merges a whole horizontal row (icon and all) into one
+          // box, so its centre is rarely on the text you asked for.
+          const result = await recognize(frame, step.region, step.text);
+          const pick = scriptSelect(result.matches, step.text, step.filter, step.pick);
+          if (pick.chosen) {
+            const [px, py] = this.toPixels(run, pick.chosen.x, pick.chosen.y);
             await sh(adb, `input tap ${px} ${py}`);
-            this.log(
-              run,
-              `找到文字「${result.tap.text}」${this.nth(result.matches.length, step.occurrence)} → 點擊 ${px},${py} (${result.ms}ms)`,
-            );
+            this.log(run, `找到文字「${pick.chosen.text}」${this.nth(pick, step.pick)} → 點擊 ${px},${py} (${result.ms}ms)`);
             return;
           }
           if (Date.now() >= deadline) {
-            this.log(
-              run,
-              result.matches.length
-                ? `找不到第 ${(step.occurrence ?? 0) + 1} 個「${step.text}」逾時(畫面上只有 ${result.matches.length} 個)`
-                : `找不到文字「${step.text}」逾時(讀到:${result.text.slice(0, 40) || "(空)"})`,
-            );
+            this.log(run, `找不到文字「${step.text}」逾時 · ${this.why(pick, result.text)}`);
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);

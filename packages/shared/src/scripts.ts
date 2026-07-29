@@ -60,8 +60,9 @@ export type ScriptStep =
       /** Optional tap offset from the match centre, normalized. */
       offsetX?: number;
       offsetY?: number;
-      /** Which match to tap when the template appears more than once. */
-      occurrence?: number;
+      /** Which candidates count, and which of them to tap. */
+      filter?: ScriptFilter;
+      pick?: ScriptPick;
     }
   /** Branch on whether the template is on screen right now. */
   | {
@@ -84,8 +85,9 @@ export type ScriptStep =
       text: string;
       region?: ScriptRegion;
       timeoutMs: number;
-      /** Which match to tap when the text appears more than once. */
-      occurrence?: number;
+      /** Which candidates count, and which of them to tap. */
+      filter?: ScriptFilter;
+      pick?: ScriptPick;
     }
   /** Branch on whether recognised text contains `text`. */
   | { type: "ifText"; text: string; region?: ScriptRegion; then: ScriptStep[]; else?: ScriptStep[] }
@@ -180,17 +182,6 @@ export interface DeviceSchedule {
   scripts: ScheduleScript[];
 }
 
-/**
- * Which match a step aims at when several are on screen, counted in **reading
- * order** — top to bottom, then left to right within a row. 0 is the first.
- *
- * Picking silently (highest score, narrowest box) looks fine until the screen
- * has two of something, and then it is unpredictable; an explicit index is
- * something a script author can reason about, and the editor's test preview
- * numbers the candidates so it can be chosen by clicking.
- */
-export const DEFAULT_OCCURRENCE = 0;
-
 // ---- text matching helpers (shared so the engine and the editor agree) ----
 
 /**
@@ -205,4 +196,185 @@ export function scriptTextKey(text: string): string {
 /** Whitespace- and variant-insensitive containment, the way an author means it. */
 export function scriptTextMatches(haystack: string, needle: string): boolean {
   return scriptTextKey(haystack).includes(scriptTextKey(needle));
+}
+
+// ---- candidate filtering and selection (shared, so preview and engine agree) ----
+
+/**
+ * How the searched text must sit inside what was recognised.
+ *
+ * `contains` is the default because OCR drops and alters characters on
+ * stylised fonts, so authors search for a distinctive fragment. But a fragment
+ * matches too much — searching 領取 also hits 已領取 and 領取獎勵 — so an
+ * author who knows the label stands alone can say so.
+ */
+export type ScriptTextMode =
+  /** Substring, anywhere. */
+  | "contains"
+  /** A whole whitespace-separated token of the recognised line. */
+  | "standalone"
+  /** The entire recognised line. */
+  | "exact";
+
+/** Which candidates count. Applied before anything is chosen between them. */
+export interface ScriptFilter {
+  mode?: ScriptTextMode;
+  /** Drop reads below this confidence (0-1). OCR junk scores low. */
+  minConfidence?: number;
+}
+
+/**
+ * How to order candidates before taking one. `reading` is top to bottom, then
+ * left to right within a row — the order a person would count them in.
+ */
+export type ScriptPickBy = "reading" | "left" | "right" | "top" | "bottom" | "score" | "random";
+
+export interface ScriptPick {
+  by?: ScriptPickBy;
+  /** Which one after ordering. */
+  index?: number;
+  /** `one` means several matches are a misread — wait rather than guess. */
+  expect?: "any" | "one";
+}
+
+/** Anything a step can act on: a recognised phrase or a template match. */
+export interface ScriptCandidate {
+  /** Centre and size, normalized 0-1. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** OCR confidence or template score, 0-1. */
+  confidence: number;
+  /** The matched words (text steps only). */
+  text?: string;
+  /** The whole recognised band the match sits in — what `mode` is judged on,
+   * since the match itself has already been narrowed down to the words. */
+  lineText?: string;
+}
+
+/** Why a candidate was dropped. The preview shows this; a filter that removes
+ * things silently is impossible to debug. */
+export type ScriptRejectReason = "mode" | "confidence";
+
+export interface ScriptSelection<T extends ScriptCandidate> {
+  /** Survivors, in pick order. */
+  kept: T[];
+  rejected: { candidate: T; reason: ScriptRejectReason }[];
+  /** What the step acts on — null when nothing qualifies. */
+  chosen: T | null;
+  /** True when `expect: "one"` wasn't satisfied. A polling step should keep
+   * waiting rather than act: a transition frame often shows two of something
+   * for a frame or two before settling. */
+  unsettled: boolean;
+}
+
+/** True when `needle` sits inside `line` the way `mode` requires. */
+export function scriptTextMatchesMode(line: string, needle: string, mode: ScriptTextMode = "contains"): boolean {
+  const want = scriptTextKey(needle);
+  if (!want) return false;
+  if (mode === "contains") return scriptTextKey(line).includes(want);
+  if (mode === "exact") return scriptTextKey(line) === want;
+  // standalone: a whole whitespace-separated token, or the whole line. When OCR
+  // drops the spaces the line is one token, so this degrades to `exact` —
+  // conservative, which is the right direction for "nothing around it".
+  return line.split(/\s+/).some((token) => scriptTextKey(token) === want);
+}
+
+const byX = (a: ScriptCandidate, b: ScriptCandidate) => a.x - b.x;
+const byY = (a: ScriptCandidate, b: ScriptCandidate) => a.y - b.y;
+
+/** Reading order: top to bottom, then left to right within a row. Two boxes
+ * share a row when their vertical centres are within half a box height. */
+export function scriptReadingOrder<T extends ScriptCandidate>(boxes: T[]): T[] {
+  const rows: T[][] = [];
+  for (const box of [...boxes].sort(byY)) {
+    const row = rows[rows.length - 1];
+    const head = row?.[0];
+    if (row && head && Math.abs(box.y - head.y) < Math.min(box.h, head.h) * 0.6) row.push(box);
+    else rows.push([box]);
+  }
+  return rows.flatMap((row) => row.sort(byX));
+}
+
+function order<T extends ScriptCandidate>(kept: T[], by: ScriptPickBy): T[] {
+  switch (by) {
+    case "left":
+      return [...kept].sort(byX);
+    case "right":
+      return [...kept].sort((a, b) => b.x - a.x);
+    case "top":
+      return [...kept].sort(byY);
+    case "bottom":
+      return [...kept].sort((a, b) => b.y - a.y);
+    case "score":
+      return [...kept].sort((a, b) => b.confidence - a.confidence);
+    case "random": {
+      // Reading order first so the shuffle is over a defined sequence; the
+      // engine logs which index came up, or a surprise is unexplainable.
+      const pool = scriptReadingOrder(kept);
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j]!, pool[i]!];
+      }
+      return pool;
+    }
+    default:
+      return scriptReadingOrder(kept);
+  }
+}
+
+/**
+ * Filter candidates, order them, and take one — the whole "which of these did
+ * you mean" decision in one place so the editor's preview and the engine can
+ * never disagree about it.
+ */
+export function scriptSelect<T extends ScriptCandidate>(
+  candidates: T[],
+  needle: string | undefined,
+  filter: ScriptFilter = {},
+  pick: ScriptPick = {},
+): ScriptSelection<T> {
+  const rejected: { candidate: T; reason: ScriptRejectReason }[] = [];
+  const kept: T[] = [];
+  for (const candidate of candidates) {
+    if (needle && candidate.lineText !== undefined && !scriptTextMatchesMode(candidate.lineText, needle, filter.mode)) {
+      rejected.push({ candidate, reason: "mode" });
+    } else if (filter.minConfidence != null && candidate.confidence < filter.minConfidence) {
+      rejected.push({ candidate, reason: "confidence" });
+    } else {
+      kept.push(candidate);
+    }
+  }
+
+  const ordered = order(kept, pick.by ?? "reading");
+  const unsettled = pick.expect === "one" && ordered.length !== 1;
+  return {
+    kept: ordered,
+    rejected,
+    chosen: unsettled ? null : (ordered[pick.index ?? 0] ?? null),
+    unsettled,
+  };
+}
+
+/**
+ * Scripts saved before filter/pick existed carry a bare `occurrence`; fold it
+ * into `pick.index` so an existing script keeps aiming where it did. Applied on load and on
+ * save, and kept out of the zod schema because a discriminated union cannot
+ * hold transformed members.
+ */
+export function scriptMigrateSteps(steps: ScriptStep[]): ScriptStep[] {
+  return steps.map((step) => {
+    const legacy = step as ScriptStep & { occurrence?: number };
+    let next = step;
+    if (legacy.occurrence != null && (step.type === "tapText" || step.type === "findTap")) {
+      const { occurrence, ...rest } = legacy;
+      next = { ...rest, pick: { ...step.pick, index: step.pick?.index ?? occurrence } } as ScriptStep;
+    }
+    if (next.type === "loop") return { ...next, body: scriptMigrateSteps(next.body) };
+    if ("then" in next && next.then) {
+      return { ...next, then: scriptMigrateSteps(next.then), ...(next.else ? { else: scriptMigrateSteps(next.else) } : {}) } as ScriptStep;
+    }
+    return next;
+  });
 }

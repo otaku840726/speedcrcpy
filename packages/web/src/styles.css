@@ -1264,6 +1264,117 @@ option {
   background: rgba(124, 245, 176, 0.3);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
+/* Configure-beside-the-picture: image left, settings right, stacked when narrow. */
+.tp-work {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.tp-config {
+  flex: 1;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tp-group {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.tp-group h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.tp-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.tp-line + .tp-line {
+  margin-top: 7px;
+}
+.tp-line label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.tp-line input[type="radio"] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.tp-line input[type="range"] {
+  flex: 1;
+  min-width: 90px;
+  max-width: 140px;
+}
+.tp-key {
+  color: var(--text-dim);
+  min-width: 40px;
+}
+.tp-val {
+  font-variant-numeric: tabular-nums;
+}
+/* Candidate list under the picture — the same order the boxes are numbered in,
+   including the rejects, so a filter can never remove something invisibly. */
+.tp-cands {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.tp-cand-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 12px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.tp-cand-row.sel {
+  background: rgba(61, 220, 132, 0.16);
+  border-color: #3ddc84;
+}
+.tp-cand-row.out {
+  color: #6d7883;
+  cursor: default;
+}
+.tp-cand-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp-cand-why {
+  font-size: 11px;
+  color: #c98a4b;
+}
+.tp-cand-row.sel .tp-cand-why {
+  color: #3ddc84;
+}
+.tp-warn-inline {
+  color: #f0a94b;
+}
+/* Summary of the filter/pick config on the step row itself. */
+.sp-summary {
+  font-size: 11px;
+  color: #7cf5b0;
+  background: rgba(61, 220, 132, 0.1);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
 /* Candidates the step could aim at. The unselected ones stay visible but quiet
    — they are alternatives, not findings. */
 .tp-box-outline.tp-cand {
@@ -1297,6 +1408,17 @@ option {
 .tp-cand.hit .tp-cand-no {
   background: #3ddc84;
   color: #06131f;
+}
+/* Rejected by a filter: present, obviously not a target. */
+.tp-box-outline.tp-cand.out {
+  border: 1px dashed #4a545f;
+  background: none;
+}
+.tp-cand.out .tp-cand-no,
+.tp-cand-row.out .tp-cand-no {
+  border-color: #4a545f;
+  color: #6d7883;
+  background: rgba(6, 19, 31, 0.9);
 }
 .tp-choice {
   margin-top: 6px;

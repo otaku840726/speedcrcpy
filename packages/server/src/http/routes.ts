@@ -31,8 +31,19 @@ const TemplateSchema = z.object({
   capturedWidth: z.coerce.number().int().min(1).max(8192),
   capturedHeight: z.coerce.number().int().min(1).max(8192),
 });
-/** Which match to act on when several are found, counted in reading order. */
-const Occurrence = z.coerce.number().int().min(0).max(50).optional();
+const FilterSchema = z
+  .object({
+    mode: z.enum(["contains", "standalone", "exact"]).optional(),
+    minConfidence: norm.optional(),
+  })
+  .optional();
+const PickSchema = z
+  .object({
+    by: z.enum(["reading", "left", "right", "top", "bottom", "score", "random"]).optional(),
+    index: z.coerce.number().int().min(0).max(50).optional(),
+    expect: z.enum(["any", "one"]).optional(),
+  })
+  .optional();
 /** Step tree — recursive because `loop` nests a body. */
 const StepSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
@@ -60,14 +71,18 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       region: RegionSchema.optional(),
       offsetX: z.coerce.number().min(-1).max(1).optional(),
       offsetY: z.coerce.number().min(-1).max(1).optional(),
-      occurrence: Occurrence,
+      occurrence: z.coerce.number().int().min(0).max(50).optional(),
+      filter: FilterSchema,
+      pick: PickSchema,
     }),
     z.object({
       type: z.literal("tapText"),
       text: z.string().min(1).max(100),
       region: RegionSchema.optional(),
       timeoutMs: Timeout,
-      occurrence: Occurrence,
+      occurrence: z.coerce.number().int().min(0).max(50).optional(),
+      filter: FilterSchema,
+      pick: PickSchema,
     }),
     z.object({
       type: z.literal("ifText"),
@@ -112,11 +127,7 @@ const ScriptBody = z.object({
 const PREVIEW_WIDTH = 720;
 /** `text` is optional: supply it and the probe also reports where a tap for
  * that text would land, refined to the matching words. */
-const OcrProbeBody = z.object({
-  region: RegionSchema.optional(),
-  text: z.string().max(100).optional(),
-  occurrence: z.number().int().min(0).max(50).optional(),
-});
+const OcrProbeBody = z.object({ region: RegionSchema.optional(), text: z.string().max(100).optional() });
 const MatchProbeBody = z.object({
   template: TemplateSchema,
   region: RegionSchema.optional(),
@@ -320,10 +331,7 @@ export function registerRoutes(
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
       const frame = await capture(await adbManager.getAdb(request.params.serial));
-      const result = await recognize(frame, body.data.region, {
-        needle: body.data.text || undefined,
-        occurrence: body.data.occurrence,
-      });
+      const result = await recognize(frame, body.data.region, body.data.text || undefined);
       return {
         ...result,
         frameWidth: frame.width,

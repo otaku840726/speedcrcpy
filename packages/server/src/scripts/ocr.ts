@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { scriptTextKey, scriptTextMatches } from "@speedcrcpy/shared";
+import { type ScriptCandidate, scriptTextKey, scriptTextMatches } from "@speedcrcpy/shared";
 import { PNG } from "pngjs";
 import { readingOrder } from "./vision.js";
 import type { Frame, Region } from "./vision.js";
@@ -30,16 +30,8 @@ import type { Frame, Region } from "./vision.js";
 
 const MODELS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "models");
 
-export interface OcrLine {
+export interface OcrLine extends ScriptCandidate {
   text: string;
-  /** Match centre in normalized (0-1) device coordinates. */
-  x: number;
-  y: number;
-  /** Bounding box in normalized device coordinates, so a UI can outline it. */
-  w: number;
-  h: number;
-  /** Recognition confidence, 0-1. */
-  confidence: number;
 }
 
 export interface OcrResult {
@@ -52,18 +44,12 @@ export interface OcrResult {
    * bottom, then left to right), each narrowed to the words themselves rather
    * than the line they sit on — see `refine`. Empty when the caller didn't ask
    * about any particular text, or nothing matched.
+   *
+   * Unfiltered on purpose: `scriptSelect` decides which of these count and
+   * which one to act on, so the editor can re-filter live without another
+   * capture and can show what a filter threw away.
    */
   matches: OcrLine[];
-  /** The match `occurrence` selected, i.e. where a tap would land. */
-  tap: OcrLine | null;
-}
-
-export interface RecognizeOptions {
-  /** Text to locate; without it there is nothing to narrow down and `matches`
-   * comes back empty. */
-  needle?: string;
-  /** Which match to aim at, in reading order. Out of range yields no `tap`. */
-  occurrence?: number;
 }
 
 /** A box in frame pixels, the unit everything internal works in. */
@@ -295,9 +281,8 @@ async function refine(
  * reading order, each narrowed to the words themselves — and `tap`, the one
  * `occurrence` selects.
  */
-export async function recognize(frame: Frame, region?: Region, options: RecognizeOptions = {}): Promise<OcrResult> {
+export async function recognize(frame: Frame, region?: Region, needle?: string): Promise<OcrResult> {
   const started = Date.now();
-  const { needle, occurrence = 0 } = options;
   const rect = region
     ? { x: region.x * frame.width, y: region.y * frame.height, w: region.w * frame.width, h: region.h * frame.height }
     : { x: 0, y: 0, w: frame.width, h: frame.height };
@@ -305,34 +290,37 @@ export async function recognize(frame: Frame, region?: Region, options: Recogniz
   const dir = mkdtempSync(join(tmpdir(), "speedcrcpy-ocr-"));
   try {
     const raw = await detect(frame, rect, dir, 0);
-    const normalize = (l: PixelLine): OcrLine => ({
+    const normalize = (l: PixelLine, lineText?: string): OcrLine => ({
       text: l.text,
       x: l.x / frame.width,
       y: l.y / frame.height,
       w: l.w / frame.width,
       h: l.h / frame.height,
       confidence: l.confidence,
+      ...(lineText === undefined ? {} : { lineText }),
     });
 
-    const matches: PixelLine[] = [];
+    // Each match remembers the band it came from: the narrowed box is the words
+    // alone, so "is there anything either side of it" can only be answered by
+    // the line, and that is what the text mode filter asks.
+    const matches: { box: PixelLine; band: PixelLine }[] = [];
     if (needle) {
       const seq = { n: 1 };
       const bands = readingOrder(raw.filter((l) => scriptTextMatches(l.text, needle)));
       for (const [index, band] of bands.entries()) {
         // Past the cap, report the band itself rather than spending minutes on
         // a screen that should have been searched with a region.
-        matches.push(...(index < REFINE_MAX_LINES ? await refine(frame, band, needle, dir, seq) : [band]));
+        const boxes = index < REFINE_MAX_LINES ? await refine(frame, band, needle, dir, seq) : [band];
+        for (const box of boxes) matches.push({ box, band });
       }
     }
 
-    const ordered = readingOrder(matches).map(normalize);
-    const lines = raw.map(normalize);
+    const lines = raw.map((l) => normalize(l));
     return {
       lines,
       text: lines.map((l) => l.text).join(" "),
       ms: Date.now() - started,
-      matches: ordered,
-      tap: ordered[occurrence] ?? null,
+      matches: readingOrder(matches.map((m) => ({ ...m.box, band: m.band }))).map((m) => normalize(m, m.band.text)),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
