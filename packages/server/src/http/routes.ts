@@ -135,6 +135,23 @@ const ScriptBody = z.object({
 
 /** Preview images are only for eyeballing position; coordinates stay normalized. */
 const PREVIEW_WIDTH = 720;
+/**
+ * Ceiling on a probe. A screencap costs ~350 ms on an idle device but 4-9 s
+ * while a game renders, and recognition adds its own seconds on top — long
+ * enough that a reverse proxy may give up first and answer 502 with no body,
+ * which tells the person at the keyboard nothing. Failing here instead produces
+ * an error that names the step that ran long.
+ */
+const PROBE_TIMEOUT_MS = 25_000;
+
+function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label}超過 ${PROBE_TIMEOUT_MS / 1000} 秒未完成`)), PROBE_TIMEOUT_MS).unref(),
+    ),
+  ]);
+}
 /** `text` is optional: supply it and the probe also reports where a tap for
  * that text would land, refined to the matching words. */
 const OcrProbeBody = z.object({ region: RegionSchema.optional(), text: z.string().max(100).optional() });
@@ -347,9 +364,9 @@ export function registerRoutes(
     const body = OcrProbeBody.safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
-      const frame = await capture(await adbManager.getAdb(request.params.serial));
+      const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
       thumbnails.offer(request.params.serial, frame);
-      const result = await recognize(frame, body.data.region, body.data.text || undefined);
+      const result = await withTimeout(recognize(frame, body.data.region, body.data.text || undefined), "文字辨識");
       return {
         ...result,
         frameWidth: frame.width,
@@ -367,11 +384,14 @@ export function registerRoutes(
     const body = MatchProbeBody.safeParse(request.body ?? {});
     if (!body.success) return reply.code(400).send({ error: "bad_request" });
     try {
-      const frame = await capture(await adbManager.getAdb(request.params.serial));
+      const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
       thumbnails.offer(request.params.serial, frame);
       const started = Date.now();
       const template = body.data.template;
-      const match = await findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region, body.data.threshold);
+      const match = await withTimeout(
+        findTemplate(frame, Buffer.from(template.png, "base64"), body.data.region, body.data.threshold),
+        "找圖比對",
+      );
       const ms = Date.now() - started;
 
       // Crop what it actually matched, so the author can eyeball whether the
