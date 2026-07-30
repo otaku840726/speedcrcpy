@@ -1,6 +1,6 @@
 import fastifyCookie from "@fastify/cookie";
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,8 +36,29 @@ export async function buildApp(
   scriptEngine: ScriptEngine,
   scheduler: Scheduler,
 ): Promise<FastifyInstance> {
-  const app = Fastify({ logger: { level: "info" } });
+  // Fastify defaults to a 1 MiB body, which a template probe cannot fit inside:
+  // an image template is cropped at full device resolution and travels as
+  // base64 (a 4/3 inflation), and a saved script carries every template it
+  // uses. Reproduced at 1.2 MB — FST_ERR_CTP_BODY_TOO_LARGE.
+  //
+  // Templates cannot be shrunk to dodge this: template matching is not
+  // scale-invariant, so a downscaled template stops matching the full-size
+  // screen it is searched against. The limit is what has to move. A single
+  // template is still capped (MAX_TEMPLATE_BASE64) so one mis-drag cannot claim
+  // the whole ceiling; this leaves room for several of them in one script.
+  const app = Fastify({ logger: { level: "info" }, bodyLimit: 16 * 1024 * 1024 });
   await app.register(fastifyCookie);
+
+  // A body over that ceiling is refused by Fastify before any route runs, and
+  // its stock reply says "Payload Too Large" in English with no hint of which
+  // part of the app is at fault. Every other error keeps its default handling.
+  app.setErrorHandler(async (error: FastifyError, request, reply) => {
+    if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
+      return reply.code(413).send({ error: "傳送的內容太大 — 通常是圖像模板,請重新框選小一點的範圍" });
+    }
+    request.log.error(error);
+    return reply.send(error);
+  });
 
   app.addHook("onRequest", async (request, reply) => {
     if (!request.url.startsWith("/api/")) return;

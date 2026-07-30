@@ -29,6 +29,18 @@ export interface ScriptTemplate {
   capturedHeight: number;
 }
 
+/**
+ * Ceiling on one template's base64 PNG, shared so the editor refuses the same
+ * crop the server would.
+ *
+ * Generous on purpose: a marquee is cropped at full device resolution and
+ * cannot be downscaled to fit (matching is not scale-invariant, so a shrunken
+ * template stops matching the screen it is searched against), so a legitimate
+ * selection over a third of a 1080×2400 screen already runs to a couple of MB
+ * once base64 adds its 4/3. Past this it is a mis-drag, not a template.
+ */
+export const MAX_TEMPLATE_BASE64 = 4_000_000;
+
 export type ScriptStep =
   | { type: "tap"; x: number; y: number }
   | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }

@@ -1,4 +1,4 @@
-import { type DeviceInfo, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -145,6 +145,9 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
   const [starting, setStarting] = useState(false);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  /** Last marquee produced a template past the size cap — shown in place of the
+   * hint until the next drag replaces it. */
+  const [tooBig, setTooBig] = useState(false);
 
   useEffect(() => {
     let url: string | undefined;
@@ -197,6 +200,7 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
       return;
     }
     dragRef.current = p;
+    setTooBig(false);
     setDrag({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
   };
 
@@ -239,12 +243,21 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
     crop.width = w;
     crop.height = h;
     crop.getContext("2d")?.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+    const png = crop.toDataURL("image/png").split(",")[1] ?? "";
+    // Say it here, with the picture still up and the marquee cleared, rather
+    // than letting a template the server will refuse reach a step and fail on
+    // the next 測試 or 儲存.
+    if (png.length > MAX_TEMPLATE_BASE64) {
+      setTooBig(true);
+      setDrag(null);
+      return;
+    }
     onPick({
       x: (x + w / 2) / canvas.width,
       y: (y + h / 2) / canvas.height,
       color: colorAt((x + w / 2) / canvas.width, (y + h / 2) / canvas.height),
       template: {
-        png: crop.toDataURL("image/png").split(",")[1] ?? "",
+        png,
         capturedWidth: canvas.width,
         capturedHeight: canvas.height,
       },
@@ -265,7 +278,7 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
     <div className="picker-backdrop" onClick={onClose}>
       <div className="picker-box" onClick={(e) => e.stopPropagation()}>
         <div className="picker-head">
-          <span>{hint}</span>
+          <span className={tooBig ? "error-text" : undefined}>{tooBig ? "框選範圍太大,請框小一點" : hint}</span>
           <button onClick={onClose}>取消</button>
         </div>
         {error ? (

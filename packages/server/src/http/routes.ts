@@ -1,5 +1,6 @@
+import { MAX_TEMPLATE_BASE64 } from "@speedcrcpy/shared";
 import { AdbServerClient } from "@yume-chan/adb";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
@@ -26,9 +27,9 @@ const norm = z.coerce.number().min(0).max(1);
 const HexColor = z.string().regex(/^#?[0-9a-fA-F]{6}$/);
 const Timeout = z.coerce.number().int().min(0).max(600_000);
 const RegionSchema = z.object({ x: norm, y: norm, w: norm, h: norm });
-/** Base64 PNG capped at ~1 MB encoded, plus the size it was captured at. */
+/** Base64 PNG, plus the size it was captured at. */
 const TemplateSchema = z.object({
-  png: z.string().min(1).max(1_400_000),
+  png: z.string().min(1).max(MAX_TEMPLATE_BASE64),
   capturedWidth: z.coerce.number().int().min(1).max(8192),
   capturedHeight: z.coerce.number().int().min(1).max(8192),
 });
@@ -143,6 +144,25 @@ const PREVIEW_WIDTH = 720;
  * an error that names the step that ran long.
  */
 const PROBE_TIMEOUT_MS = 25_000;
+
+/** Does any template in this body blow the size cap? Walks the whole thing
+ * because a script nests steps inside loops and branches. */
+function hasOversizeTemplate(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasOversizeTemplate);
+  if (!value || typeof value !== "object") return false;
+  const png = (value as { template?: { png?: unknown } }).template?.png;
+  if (typeof png === "string" && png.length > MAX_TEMPLATE_BASE64) return true;
+  return Object.values(value).some(hasOversizeTemplate);
+}
+
+/** A body that failed validation only because its template is enormous should
+ * say so: "bad_request" sends the author looking through their step settings
+ * for a fault that is really the size of the marquee they dragged. */
+function rejectInvalid(reply: FastifyReply, body: unknown) {
+  return hasOversizeTemplate(body)
+    ? reply.code(413).send({ error: "圖像太大,請重新框選小一點的範圍" })
+    : reply.code(400).send({ error: "bad_request" });
+}
 
 function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
   return Promise.race([
@@ -335,7 +355,7 @@ export function registerRoutes(
 
   app.post("/api/scripts", async (request, reply) => {
     const body = ScriptBody.safeParse(request.body);
-    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    if (!body.success) return rejectInvalid(reply, request.body);
     const saved = scriptStore.save(body.data as never);
     // Editing a script is a fresh intent — in particular, re-enabling one that
     // was stopped should let it be scheduled again.
@@ -382,7 +402,7 @@ export function registerRoutes(
   /** Try template matching now: where it matched, how well, and against what. */
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/match", async (request, reply) => {
     const body = MatchProbeBody.safeParse(request.body ?? {});
-    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    if (!body.success) return rejectInvalid(reply, request.body);
     try {
       const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
       thumbnails.offer(request.params.serial, frame);
