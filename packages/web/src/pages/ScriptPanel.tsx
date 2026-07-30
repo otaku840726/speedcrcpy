@@ -1,11 +1,20 @@
-import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, SCRIPT_STEP_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
+import {
+  appendTo,
+  childrenOf,
+  editList,
+  insertAfter,
+  intoBranch,
+  moveAt,
+  type Path,
+  removeAt,
+  replaceAt,
+} from "./step-tree";
+import { asDraft, type Draft, draftBody, isSaved, newDraft, stableJson } from "./script-draft";
 import { TestPreview, type TestTarget } from "./TestPreview";
-
-/** Where a step lives in the (nested) tree: child indexes plus which branch. */
-type Path = { index: number; branch?: "body" | "then" | "else" }[];
 
 const MODE_LABELS: Record<string, string> = { standalone: "前後無字", exact: "整行相符" };
 const ORDER_LABELS: Record<string, string> = {
@@ -54,66 +63,54 @@ const KEY_LABELS: Record<string, string> = {
   volumeDown: "音量-",
 };
 
-const NEW_STEPS: { label: string; make: () => ScriptStep; key: boolean }[] = [
-  { label: "找圖點擊", key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
-  { label: "若找到圖", key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
-  { label: "依文字點擊", key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
-  { label: "若文字含", key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
-  { label: "讀取數值", key: true, make: () => ({ type: "ifNumber", compare: ">", value: 0, then: [], else: [] }) },
-  { label: "點擊", key: false, make: () => ({ type: "tap", x: 0.5, y: 0.5 }) },
-  { label: "滑動", key: false, make: () => ({ type: "swipe", x1: 0.5, y1: 0.7, x2: 0.5, y2: 0.3, durationMs: 300 }) },
-  { label: "等待", key: false, make: () => ({ type: "wait", minMs: 500, maxMs: 500 }) },
-  { label: "等待顏色", key: false, make: () => ({ type: "waitColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, timeoutMs: 8000 }) },
-  { label: "若顏色", key: false, make: () => ({ type: "ifColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, then: [], else: [] }) },
-  { label: "重複", key: false, make: () => ({ type: "loop", count: 0, body: [] }) },
-  { label: "輸入文字", key: false, make: () => ({ type: "text", value: "" }) },
-  { label: "按鍵", key: false, make: () => ({ type: "key", key: "back" }) },
+/** The palette, in the order it reads on screen. Names come from the shared map
+ * so the run log calls a step what the editor calls it. */
+const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
+  { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
+  { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
+  { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
+  { key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
+  { key: true, make: () => ({ type: "ifNumber", compare: ">", value: 0, then: [], else: [] }) },
+  { key: false, make: () => ({ type: "tap", x: 0.5, y: 0.5 }) },
+  { key: false, make: () => ({ type: "swipe", x1: 0.5, y1: 0.7, x2: 0.5, y2: 0.3, durationMs: 300 }) },
+  { key: false, make: () => ({ type: "wait", minMs: 500, maxMs: 500 }) },
+  { key: false, make: () => ({ type: "waitColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, timeoutMs: 8000 }) },
+  { key: false, make: () => ({ type: "ifColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, then: [], else: [] }) },
+  { key: false, make: () => ({ type: "loop", count: 0, body: [] }) },
+  { key: false, make: () => ({ type: "text", value: "" }) },
+  { key: false, make: () => ({ type: "key", key: "back" }) },
 ];
 
 function EMPTY_TEMPLATE(): ScriptTemplate {
   return { png: "", capturedWidth: 0, capturedHeight: 0 };
 }
 
-// ---- immutable tree edits ----
+/**
+ * The step a 複製 or 剪下 put aside, at module scope rather than in the panel's
+ * state: a step copied out of one script is usually wanted in another, and
+ * closing the panel in between should not lose it. Deliberately not persisted —
+ * one step can carry a 4 MB template and localStorage has ~5 MB for everything.
+ */
+let clipboard: ScriptStep | undefined;
 
-function childrenOf(step: ScriptStep, branch: "body" | "then" | "else"): ScriptStep[] {
-  const anyStep = step as unknown as Record<string, ScriptStep[] | undefined>;
-  return anyStep[branch] ?? [];
-}
+/**
+ * Edits in progress, for the same reason and in the same place as the
+ * clipboard: closing the panel to go and look at the game is part of editing,
+ * not the end of it. Every one of these is mirrored to the server (debounced),
+ * which is what carries them across a reload or to another browser.
+ */
+const localDrafts = new Map<string, Draft>();
+/** What the server already has, per draft, so an unchanged body is never
+ * uploaded twice. */
+const sentDrafts = new Map<string, string>();
+let openDraftKey: string | undefined;
+const openDraft = (): Draft | undefined => (openDraftKey ? localDrafts.get(openDraftKey) : undefined);
 
-function withChildren(step: ScriptStep, branch: "body" | "then" | "else", children: ScriptStep[]): ScriptStep {
-  return { ...step, [branch]: children } as ScriptStep;
-}
-
-/** Apply `edit` to the child list that `path` points into. */
-function editList(steps: ScriptStep[], path: Path, edit: (list: ScriptStep[], index: number) => ScriptStep[]): ScriptStep[] {
-  const [head, ...rest] = path;
-  if (!head) return steps;
-  if (rest.length === 0 && !head.branch) return edit(steps, head.index);
-  const branch = head.branch ?? "body";
-  return steps.map((step, i) => {
-    if (i !== head.index) return step;
-    const kids = childrenOf(step, branch);
-    return withChildren(step, branch, rest.length === 0 ? edit(kids, -1) : editList(kids, rest, edit));
-  });
-}
-
-/** Re-target a step's path at one of its branches, so edits land in that child list. */
-const intoBranch = (path: Path, branch: "body" | "then" | "else"): Path => [
-  ...path.slice(0, -1),
-  { index: path[path.length - 1]!.index, branch },
-];
-
-const replaceAt = (next: ScriptStep) => (list: ScriptStep[], i: number) => list.map((s, j) => (j === i ? next : s));
-const removeAt = () => (list: ScriptStep[], i: number) => list.filter((_, j) => j !== i);
-const appendTo = (step: ScriptStep) => (list: ScriptStep[]) => [...list, step];
-const moveAt = (dir: -1 | 1) => (list: ScriptStep[], i: number) => {
-  const j = i + dir;
-  if (j < 0 || j >= list.length) return list;
-  const next = [...list];
-  [next[i], next[j]] = [next[j]!, next[i]!];
-  return next;
-};
+/** How long to wait after the last edit before mirroring a draft to the server.
+ * A draft carries its image templates, so this is megabytes on a link this
+ * project exists to be careful with — waiting for a pause and skipping an
+ * unchanged body keeps it to roughly one upload per burst of editing. */
+const DRAFT_SYNC_MS = 2000;
 
 // ---- picker ----
 
@@ -328,6 +325,10 @@ function StepRow({
   onRemove,
   onMove,
   onAdd,
+  onCopy,
+  onCut,
+  onPaste,
+  clip,
   pick,
   probe,
 }: {
@@ -337,6 +338,13 @@ function StepRow({
   onRemove: (path: Path) => void;
   onMove: (path: Path, dir: -1 | 1) => void;
   onAdd: (path: Path, branch: "body" | "then" | "else", step: ScriptStep) => void;
+  onCopy: (step: ScriptStep) => void;
+  onCut: (path: Path, step: ScriptStep) => void;
+  /** Paste the clipboard directly below this row. */
+  onPaste: (path: Path) => void;
+  /** What is on the clipboard, so the row can offer 貼上 only when there is
+   * something to paste, and name it. */
+  clip: ScriptStep | undefined;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
   probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
 }) {
@@ -544,12 +552,32 @@ function StepRow({
         : [];
 
   return (
-    <div className={`sp-step${branches.length ? " sp-block" : ""}`}>
+    <div className={`sp-step${branches.length ? " sp-block" : ""}${step.disabled ? " off" : ""}`}>
       <div className="sp-line">
+        {/* Off but kept. Written as `undefined` rather than `false` so a step
+            that was never switched off stays exactly as it was on disk. */}
+        <input
+          className="sp-onoff"
+          type="checkbox"
+          checked={!step.disabled}
+          onChange={(e) => set({ disabled: e.target.checked ? undefined : true })}
+          title={
+            step.disabled
+              ? `已關閉,執行時會略過${branches.length ? "(含裡面的步驟)" : ""} — 點一下開啟`
+              : `關閉這個步驟:保留設定但執行時略過${branches.length ? "(含裡面的步驟)" : ""}`
+          }
+        />
         <span className="sp-body">{body}</span>
         <span className="sp-actions">
           <button onClick={() => onMove(path, -1)} title="上移"><Icon name="arrowUp" size={12} /></button>
           <button onClick={() => onMove(path, 1)} title="下移"><Icon name="arrowDown" size={12} /></button>
+          <button onClick={() => onCopy(step)} title="複製(含底下的子步驟)"><Icon name="copy" size={12} /></button>
+          <button onClick={() => onCut(path, step)} title="剪下"><Icon name="scissors" size={12} /></button>
+          {clip && (
+            <button onClick={() => onPaste(path)} title={`貼上「${SCRIPT_STEP_LABELS[clip.type]}」到這列下方`}>
+              <Icon name="clipboard" size={12} />
+            </button>
+          )}
           <button onClick={() => onRemove(path)} title="刪除"><Icon name="trash" size={12} /></button>
         </span>
       </div>
@@ -565,18 +593,22 @@ function StepRow({
               onRemove={onRemove}
               onMove={onMove}
               onAdd={onAdd}
+              onCopy={onCopy}
+              onCut={onCut}
+              onPaste={onPaste}
+              clip={clip}
               pick={pick}
               probe={probe}
             />
           ))}
-          <AddMenu onAdd={(s) => onAdd(path, branch, s)} />
+          <AddMenu onAdd={(s) => onAdd(path, branch, s)} clip={clip} />
         </div>
       ))}
     </div>
   );
 }
 
-function AddMenu({ onAdd }: { onAdd: (step: ScriptStep) => void }) {
+function AddMenu({ onAdd, clip }: { onAdd: (step: ScriptStep) => void; clip: ScriptStep | undefined }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="sp-add">
@@ -585,16 +617,29 @@ function AddMenu({ onAdd }: { onAdd: (step: ScriptStep) => void }) {
       </button>
       {open && (
         <div className="sp-palette">
+          {/* Appends to the end of this list — the only way into a branch that
+              has no rows yet, since the per-row 貼上 needs a row to sit under. */}
+          {clip && (
+            <button
+              className="sp-chip paste"
+              onClick={() => {
+                onAdd(structuredClone(clip));
+                setOpen(false);
+              }}
+            >
+              <Icon name="clipboard" size={12} /> 貼上「{SCRIPT_STEP_LABELS[clip.type]}」
+            </button>
+          )}
           {NEW_STEPS.map((s) => (
             <button
-              key={s.label}
+              key={s.make().type}
               className={s.key ? "sp-chip key" : "sp-chip"}
               onClick={() => {
                 onAdd(s.make());
                 setOpen(false);
               }}
             >
-              {s.label}
+              {SCRIPT_STEP_LABELS[s.make().type]}
             </button>
           ))}
         </div>
@@ -607,17 +652,19 @@ function AddMenu({ onAdd }: { onAdd: (step: ScriptStep) => void }) {
 
 export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () => void }) {
   const [scripts, setScripts] = useState<Script[]>([]);
-  const [draft, setDraft] = useState<{
-    id?: string;
-    name: string;
-    steps: ScriptStep[];
-    trigger: ScriptTrigger;
-    priority: number;
-    enabled: boolean;
-    devices: string[];
-  }>();
+  const [draft, setDraft] = useState<Draft | undefined>(openDraft);
+  /** Which scripts have edits waiting, for the dots in the picker. Keys only —
+   * the bodies stay on the server until one is actually opened. */
+  const [draftKeys, setDraftKeys] = useState<{ key: string; updatedAt: number }[]>([]);
+  /** Shows 已儲存 for a moment after a save; cleared by the next edit. */
+  const [justSaved, setJustSaved] = useState(false);
+  /** Edits the debounce is still sitting on, so closing the panel can flush them. */
+  const unsent = useRef<{ key: string; draft: Draft } | undefined>(undefined);
   /** Known devices, so a scheduled script can be pointed at several. */
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  /** Mirrors the module-level clipboard; state only so the paste buttons appear
+   * the moment something is copied. */
+  const [clip, setClip] = useState<ScriptStep | undefined>(clipboard);
   const [status, setStatus] = useState<ScriptStatus>();
   const [busy, setBusy] = useState(false);
   const [picker, setPicker] = useState<{ mode: PickMode; apply: (r: PickResult) => void }>();
@@ -637,6 +684,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
     // Every script, not this device's — a script is a procedure, and which
     // devices it is scheduled on is a property of the script.
     setScripts(await api<Script[]>("/api/scripts").catch(() => []));
+    setDraftKeys(await api<{ key: string; updatedAt: number }[]>("/api/drafts").catch(() => []));
   }, []);
 
   useEffect(() => {
@@ -648,6 +696,112 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Nothing open yet (a fresh page, or the panel opened for the first time):
+  // pick up the most recent unsaved edit rather than making someone hunt for
+  // where they were. Only on a cold start — reopening the panel already has it.
+  useEffect(() => {
+    if (draft || !draftKeys.length) return;
+    const latest = [...draftKeys].sort((a, b) => b.updatedAt - a.updatedAt)[0]!;
+    void openKey(latest.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKeys]);
+
+  /** Show a draft: from this page's memory if it has been touched here, else
+   * from the server, which is where it lives between reloads. */
+  const openKey = async (key: string) => {
+    const cached = localDrafts.get(key);
+    if (cached) {
+      openDraftKey = key;
+      setDraft(cached);
+      return;
+    }
+    const stored = await api<{ body: Draft }>(`/api/drafts/${key}`).catch(() => undefined);
+    if (!stored) return;
+    const restored = { ...stored.body, key };
+    localDrafts.set(key, restored);
+    openDraftKey = key;
+    setDraft(restored);
+  };
+
+  /** Every edit goes through here, so the in-memory copy and the on-screen one
+   * never disagree. */
+  const applyDraft = (update: (current: Draft) => Draft) =>
+    setDraft((current) => {
+      if (!current) return current;
+      const next = update(current);
+      localDrafts.set(next.key, next);
+      setJustSaved(false);
+      return next;
+    });
+
+  const show = (next: Draft | undefined) => {
+    openDraftKey = next?.key;
+    if (next) localDrafts.set(next.key, next);
+    setDraft(next);
+    setTest(undefined);
+    setJustSaved(false);
+  };
+
+  const stored = scripts.find((s) => s.id === draft?.id);
+  const dirty = !!draft && !isSaved(draft, stored);
+
+  /** Drop a draft everywhere: on screen it is now identical to the script, so
+   * keeping it would leave a dot promising edits that are not there. */
+  const forget = useCallback(async (key: string) => {
+    localDrafts.delete(key);
+    sentDrafts.delete(key);
+    await api(`/api/drafts/${encodeURIComponent(key)}`, { method: "DELETE" }).catch(() => {});
+    setDraftKeys((keys) => keys.filter((k) => k.key !== key));
+  }, []);
+
+  // Mirror the draft to the server once editing pauses. Skipped when the body
+  // is byte-identical to the last one sent, so idle time costs nothing.
+  useEffect(() => {
+    if (!draft) return;
+    const key = draft.key;
+    const body = stableJson(draftBody(draft));
+    if (!dirty) {
+      if (sentDrafts.has(key)) void forget(key);
+      return;
+    }
+    if (sentDrafts.get(key) === body) return;
+    // Remembered outside the timer as well: closing the panel within the pause
+    // cancels the timer, and those last edits are the ones most worth keeping.
+    unsent.current = { key, draft };
+    const timer = setTimeout(() => void syncDraft(), DRAFT_SYNC_MS);
+    return () => clearTimeout(timer);
+  }, [draft, dirty, forget]);
+
+  const syncDraft = async () => {
+    const waiting = unsent.current;
+    if (!waiting) return;
+    try {
+      await api(`/api/drafts/${encodeURIComponent(waiting.key)}`, {
+        method: "PUT",
+        body: JSON.stringify(draftBody(waiting.draft)),
+      });
+      sentDrafts.set(waiting.key, stableJson(draftBody(waiting.draft)));
+      unsent.current = undefined;
+      setDraftKeys((keys) =>
+        keys.some((k) => k.key === waiting.key) ? keys : [...keys, { key: waiting.key, updatedAt: Date.now() }],
+      );
+    } catch (e: unknown) {
+      setError(e instanceof Error ? `草稿未保留:${e.message}` : "草稿未保留");
+    }
+  };
+
+  // Closing the panel is not an edit — flush whatever the pause was still
+  // holding, so the server copy matches what is on screen.
+  useEffect(() => () => void syncDraft(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 已儲存 is an acknowledgement, not a state; the quiet disabled 儲存 button is
+  // what says "nothing to save" from then on.
+  useEffect(() => {
+    if (!justSaved) return;
+    const timer = setTimeout(() => setJustSaved(false), 2000);
+    return () => clearTimeout(timer);
+  }, [justSaved]);
 
   // Poll run status while the panel is open.
   useEffect(() => {
@@ -665,23 +819,76 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   }, [serial, starting]);
 
   const editSteps = (fn: (steps: ScriptStep[]) => ScriptStep[]) =>
-    setDraft((d) => (d ? { ...d, steps: fn(d.steps) } : d));
+    applyDraft((d) => ({ ...d, steps: fn(d.steps) }));
+
+  /** Any edit that moves rows around invalidates the open test dialog: it holds
+   * the path of the step it was opened for, and that path now points at
+   * whatever took its place. */
+  const restructure = (fn: (steps: ScriptStep[]) => ScriptStep[]) => {
+    setTest(undefined);
+    editSteps(fn);
+  };
+
+  const copyStep = (step: ScriptStep) => {
+    clipboard = structuredClone(step);
+    setClip(clipboard);
+  };
 
   const save = async () => {
     if (!draft) return;
     setBusy(true);
+    setError(undefined);
     try {
-      const saved = await api<Script>("/api/scripts", { method: "POST", body: JSON.stringify(draft) });
-      setDraft({
-        id: saved.id,
-        name: saved.name,
-        steps: saved.steps,
-        trigger: saved.trigger,
-        priority: saved.priority,
-        enabled: saved.enabled,
-        devices: saved.devices,
-      });
+      const saved = await api<Script>("/api/scripts", { method: "POST", body: JSON.stringify(draftBody(draft)) });
+      // Saved is saved: the draft has nothing left to remember, and a new
+      // script's `new:` key is replaced by its real id.
+      unsent.current = undefined;
+      await forget(draft.key);
+      show(asDraft(saved));
+      setJustSaved(true);
       await reload();
+    } catch (e: unknown) {
+      // A script carrying image templates is the one thing here big enough to
+      // be refused outright, and that refusal now says something useful. The
+      // draft is untouched, so nothing is lost by failing.
+      setError(e instanceof Error ? e.message : "儲存失敗");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** Back to the saved version, or away entirely for a script that was never
+   * saved. Confirmed first: a draft can hold a template that took a marquee to
+   * frame, and there is no undo behind this. */
+  const discard = async () => {
+    if (!draft) return;
+    const question = stored ? `放棄「${stored.name}」未儲存的變更?` : `放棄未儲存的「${draft.name}」?`;
+    if (!confirm(question)) return;
+    await forget(draft.key);
+    show(stored ? asDraft(stored) : undefined);
+  };
+
+  /** Duplicate what is on screen, unsaved edits and all. The copy keeps the
+   * schedule but never inherits an enabled one — two identical daily scripts
+   * both firing is nobody's intent. */
+  const duplicate = async () => {
+    if (!draft) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const copy = {
+        ...draftBody(draft),
+        id: undefined,
+        // The server caps a name at 60 characters and answers 400 past it.
+        name: `${draft.name} 複本`.slice(0, 60),
+        enabled: draft.trigger.type === "manual" ? draft.enabled : false,
+      };
+      // The original keeps its draft — copying is not saving what you are
+      // looking at, and the copy is a different script from here on.
+      show(asDraft(await api<Script>("/api/scripts", { method: "POST", body: JSON.stringify(copy) })));
+      await reload();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "複製失敗");
     } finally {
       setBusy(false);
     }
@@ -718,6 +925,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       <div className="sp-head">
         <Icon name="robot" size={18} />
         <span style={{ fontWeight: 600 }}>自動化腳本</span>
+        {dirty && <span className="sp-unsaved" title="這些變更還沒儲存,但已經保留著">未儲存</span>}
         <span style={{ flex: 1 }} />
         {active ? (
           <button
@@ -746,6 +954,9 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       </div>
 
       {error && <p className="error-text">{error}</p>}
+      {dirty && draft?.id && !active && (
+        <p className="sp-warn-inline">執行的是已儲存的版本 — 要跑畫面上的內容請先儲存</p>
+      )}
       {activity && (
         <div className={`sp-activity${running ? " run" : ""}`}>
           <span className="sp-dot" />
@@ -757,34 +968,38 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
         <select
           value={draft?.id ?? ""}
           onChange={(e) => {
-            const found = scripts.find((s) => s.id === e.target.value);
-            setDraft(
-              found
-                ? {
-                    id: found.id,
-                    name: found.name,
-                    steps: found.steps,
-                    trigger: found.trigger,
-                    priority: found.priority,
-                    enabled: found.enabled,
-                    devices: found.devices,
-                  }
-                : undefined,
-            );
+            const id = e.target.value;
+            if (!id) return show(undefined);
+            // A script with edits waiting opens at those edits, not at the
+            // saved version — that is what the dot beside it promises.
+            if (draftKeys.some((k) => k.key === id)) return void openKey(id);
+            const found = scripts.find((s) => s.id === id);
+            show(found ? asDraft(found) : undefined);
           }}
         >
           <option value="">— 選擇腳本 —</option>
           {scripts.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+            <option key={s.id} value={s.id}>
+              {draftKeys.some((k) => k.key === s.id) ? `● ${s.name}` : s.name}
+            </option>
           ))}
         </select>
-        <button onClick={() => setDraft({ name: "新腳本", steps: [], trigger: { type: "manual" }, priority: 20, enabled: true, devices: [serial] })}>新建</button>
+        <button onClick={() => show(newDraft(serial))}>新建</button>
+        {draft && (
+          <button
+            title={draft.trigger.type === "manual" ? "複製成另一支腳本" : "複製成另一支腳本(複本的排程不會啟用)"}
+            disabled={busy}
+            onClick={() => void duplicate()}
+          >
+            <Icon name="copy" size={13} />
+          </button>
+        )}
         {draft?.id && (
           <button
             title="刪除腳本"
             onClick={async () => {
               await api(`/api/scripts/${draft.id}`, { method: "DELETE" }).catch(() => {});
-              setDraft(undefined);
+              show(undefined);
               await reload();
             }}
           >
@@ -796,8 +1011,26 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       {draft && (
         <>
           <div className="sp-name">
-            <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="腳本名稱" />
-            <button className="primary" disabled={busy} onClick={() => void save()}>儲存</button>
+            <input value={draft.name} onChange={(e) => applyDraft((d) => ({ ...d, name: e.target.value }))} placeholder="腳本名稱" />
+            {dirty && (
+              <button title="放棄未儲存的變更" disabled={busy} onClick={() => void discard()}>
+                <Icon name="undo" size={13} />
+              </button>
+            )}
+            <button
+              className={dirty ? "primary" : justSaved ? "saved" : ""}
+              disabled={busy || !dirty}
+              onClick={() => void save()}
+              title={dirty ? "儲存到伺服器" : justSaved ? "已儲存" : "沒有未儲存的變更"}
+            >
+              {justSaved && !dirty ? (
+                <>
+                  <Icon name="check" size={13} /> 已儲存
+                </>
+              ) : (
+                "儲存"
+              )}
+            </button>
           </div>
 
           <div className="sp-sched">
@@ -805,7 +1038,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
               value={draft.trigger.type}
               onChange={(e) => {
                 const type = e.target.value as ScriptTrigger["type"];
-                setDraft({ ...draft, trigger: type === "daily" ? { type, time: "09:00" } : { type } });
+                applyDraft((d) => ({ ...d, trigger: type === "daily" ? { type, time: "09:00" } : { type } }));
               }}
             >
               <option value="manual">手動</option>
@@ -816,17 +1049,17 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
               <input
                 type="time"
                 value={draft.trigger.time}
-                onChange={(e) => setDraft({ ...draft, trigger: { type: "daily", time: e.target.value } })}
+                onChange={(e) => applyDraft((d) => ({ ...d, trigger: { type: "daily", time: e.target.value } }))}
               />
             )}
-            <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })}>
+            <select value={draft.priority} onChange={(e) => applyDraft((d) => ({ ...d, priority: Number(e.target.value) }))}>
               {PRIORITY_LABELS.map((p) => (
                 <option key={p.value} value={p.value}>優先 {p.label}</option>
               ))}
             </select>
             {draft.trigger.type !== "manual" && (
               <label className="sp-enable">
-                <input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} />
+                <input type="checkbox" checked={draft.enabled} onChange={(e) => applyDraft((d) => ({ ...d, enabled: e.target.checked }))} />
                 啟用
               </label>
             )}
@@ -842,12 +1075,12 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                     type="checkbox"
                     checked={draft.devices.includes(d.serial)}
                     onChange={(e) =>
-                      setDraft({
-                        ...draft,
+                      applyDraft((current) => ({
+                        ...current,
                         devices: e.target.checked
-                          ? [...draft.devices, d.serial]
-                          : draft.devices.filter((x) => x !== d.serial),
-                      })
+                          ? [...current.devices, d.serial]
+                          : current.devices.filter((x) => x !== d.serial),
+                      }))
                     }
                   />
                   {d.name || d.serial}
@@ -865,9 +1098,16 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 step={step}
                 path={[{ index: i }]}
                 onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
-                onRemove={(p) => editSteps((s) => editList(s, p, removeAt()))}
-                onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
+                onRemove={(p) => restructure((s) => editList(s, p, removeAt()))}
+                onMove={(p, dir) => restructure((s) => editList(s, p, moveAt(dir)))}
                 onAdd={(p, branch, step) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(step)))}
+                onCopy={copyStep}
+                onCut={(p, cutStep) => {
+                  copyStep(cutStep);
+                  restructure((s) => editList(s, p, removeAt()));
+                }}
+                onPaste={(p) => clip && restructure((s) => editList(s, p, insertAfter(structuredClone(clip))))}
+                clip={clip}
                 pick={(mode, apply) => setPicker({ mode, apply })}
                 probe={(target, path, step) =>
                   setTest({
@@ -884,7 +1124,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 }
               />
             ))}
-            <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} />
+            <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} clip={clip} />
           </div>
 
         </>

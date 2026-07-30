@@ -90,6 +90,18 @@ export function Session({
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
   const [scriptsOpen, setScriptsOpen] = useState(false);
+  /** Unsaved script edits waiting somewhere. With the panel shut there is
+   * nothing else on screen to say so, and the whole point of keeping a draft is
+   * that you can leave and come back. */
+  const [hasDrafts, setHasDrafts] = useState(false);
+  useEffect(() => {
+    // Only while the panel is shut: with it open, the panel itself is the
+    // authority and polling behind it would just fight its own writes.
+    if (scriptsOpen) return;
+    void api<{ key: string }[]>("/api/drafts")
+      .then((list) => setHasDrafts(list.length > 0))
+      .catch(() => {});
+  }, [scriptsOpen]);
   const [controlHint, setControlHint] = useState(false);
   const hintTimerRef = useRef<number | undefined>(undefined);
   // Sound is muted by default every session; a user tap unmutes (which also
@@ -499,7 +511,8 @@ export function Session({
                   <Icon name="motherboard" />
                 </button>
                 <button
-                  title="自動化腳本"
+                  className={!scriptsOpen && hasDrafts ? "has-draft" : undefined}
+                  title={hasDrafts ? "自動化腳本(有未儲存的編輯)" : "自動化腳本"}
                   onClick={() => setScriptsOpen((v) => !v)}
                   style={scriptsOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
                 >

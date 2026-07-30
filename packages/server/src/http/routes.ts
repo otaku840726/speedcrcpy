@@ -9,6 +9,7 @@ import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
 import type { Scheduler } from "../scripts/scheduler.js";
+import type { DraftStore } from "../scripts/draft-store.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import { ocrModel } from "../scripts/ocr.js";
@@ -52,16 +53,20 @@ const PickSchema = z
     expect: z.enum(["any", "one"]).optional(),
   })
   .optional();
+/** Every step carries an off switch, so it has to be on every member below:
+ * zod strips unknown keys rather than rejecting them, so leaving it off one
+ * member would drop the flag on save and that step would quietly come back on. */
+const offSwitch = { disabled: z.boolean().optional() };
 /** Step tree — recursive because `loop` nests a body. */
 const StepSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
-    z.object({ type: z.literal("tap"), x: norm, y: norm }),
-    z.object({ type: z.literal("swipe"), x1: norm, y1: norm, x2: norm, y2: norm, durationMs: z.coerce.number().int().min(1).max(60_000) }),
-    z.object({ type: z.literal("wait"), minMs: z.coerce.number().int().min(0).max(600_000), maxMs: z.coerce.number().int().min(0).max(600_000) }),
-    z.object({ type: z.literal("text"), value: z.string().max(1000) }),
-    z.object({ type: z.literal("key"), key: ScriptKeyEnum }),
-    z.object({ type: z.literal("loop"), count: z.coerce.number().int().min(0).max(1_000_000), body: z.array(StepSchema).max(200) }),
-    z.object({ type: z.literal("waitColor"), x: norm, y: norm, color: HexColor, tolerance: norm, timeoutMs: Timeout }),
+    z.object({ type: z.literal("tap"), x: norm, y: norm, ...offSwitch }),
+    z.object({ type: z.literal("swipe"), x1: norm, y1: norm, x2: norm, y2: norm, durationMs: z.coerce.number().int().min(1).max(60_000), ...offSwitch }),
+    z.object({ type: z.literal("wait"), minMs: z.coerce.number().int().min(0).max(600_000), maxMs: z.coerce.number().int().min(0).max(600_000), ...offSwitch }),
+    z.object({ type: z.literal("text"), value: z.string().max(1000), ...offSwitch }),
+    z.object({ type: z.literal("key"), key: ScriptKeyEnum, ...offSwitch }),
+    z.object({ type: z.literal("loop"), count: z.coerce.number().int().min(0).max(1_000_000), body: z.array(StepSchema).max(200), ...offSwitch }),
+    z.object({ type: z.literal("waitColor"), x: norm, y: norm, color: HexColor, tolerance: norm, timeoutMs: Timeout, ...offSwitch }),
     z.object({
       type: z.literal("ifColor"),
       x: norm,
@@ -70,6 +75,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       tolerance: norm,
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("findTap"),
@@ -82,6 +88,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       occurrence: z.coerce.number().int().min(0).max(50).optional(),
       filter: FilterSchema,
       pick: PickSchema,
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("tapText"),
@@ -93,6 +100,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       pick: PickSchema,
       offsetX: z.coerce.number().min(-1).max(1).optional(),
       offsetY: z.coerce.number().min(-1).max(1).optional(),
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("ifText"),
@@ -100,6 +108,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       region: RegionSchema.optional(),
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("ifNumber"),
@@ -108,6 +117,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       value: z.coerce.number(),
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("ifImage"),
@@ -116,6 +126,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       region: RegionSchema.optional(),
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
+      ...offSwitch,
     }),
   ]),
 );
@@ -199,6 +210,7 @@ export function registerRoutes(
   sessionManager: SessionManager,
   displayManager: DisplayManager,
   scriptStore: ScriptStore,
+  draftStore: DraftStore,
   scriptEngine: ScriptEngine,
   scheduler: Scheduler,
 ): void {
@@ -363,9 +375,48 @@ export function registerRoutes(
     return saved;
   });
 
-  app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (request, reply) =>
-    scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" }),
-  );
+  app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (request, reply) => {
+    // The draft goes with the script; leaving it behind would offer to restore
+    // edits to something that no longer exists.
+    draftStore.delete(request.params.id);
+    return scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" });
+  });
+
+  // ---- drafts ----
+  //
+  // An edit in progress, kept server-side so it survives a reload, a closed
+  // panel, or moving to another browser. Stored as sent: a draft is half
+  // finished by nature, so the script schema would reject exactly the states
+  // worth keeping. What is still enforced is size — the same template ceiling
+  // as everywhere else, since a draft carries the same images.
+
+  /** Script ids are uuids; an unsaved script uses a `new:<uuid>` key. */
+  const DRAFT_KEY = /^(new:)?[a-zA-Z0-9-]{1,64}$/;
+
+  /** Keys only. The editor asks this on every open just to know which scripts
+   * have unsaved edits, and a draft body carries its image templates — several
+   * MB that nobody asked for yet. Bodies come one at a time, below. */
+  app.get("/api/drafts", async () => draftStore.list().map(({ key, updatedAt }) => ({ key, updatedAt })));
+
+  app.get<{ Params: { key: string } }>("/api/drafts/:key", async (request, reply) => {
+    const draft = draftStore.get(request.params.key);
+    return draft ?? reply.code(404).send({ error: "not_found" });
+  });
+
+  app.put<{ Params: { key: string } }>("/api/drafts/:key", async (request, reply) => {
+    if (!DRAFT_KEY.test(request.params.key)) return reply.code(400).send({ error: "bad_request" });
+    const body = request.body;
+    if (!body || typeof body !== "object") return reply.code(400).send({ error: "bad_request" });
+    if (hasOversizeTemplate(body)) return reply.code(413).send({ error: "圖像太大,請重新框選小一點的範圍" });
+    return draftStore.put(request.params.key, body, Date.now());
+  });
+
+  app.delete<{ Params: { key: string } }>("/api/drafts/:key", async (request) => {
+    draftStore.delete(request.params.key);
+    // Idempotent: discarding twice, or saving a script that never had a draft,
+    // is not a failure worth reporting to the editor.
+    return { ok: true };
+  });
 
   /** Run on the device the caller is looking at, whatever the script's own
    * scheduled devices are — pressing 執行 means "here, now". */

@@ -932,6 +932,20 @@ option {
   align-items: center;
   gap: 6px;
 }
+.sp-onoff {
+  flex: none;
+  margin: 0;
+  cursor: pointer;
+}
+/* A switched-off step keeps its place and its settings, and says so by fading —
+   including everything nested inside it, which is also skipped. */
+.sp-step.off > .sp-line,
+.sp-step.off > .sp-branch {
+  opacity: 0.45;
+}
+.sp-step.off > .sp-line .sp-onoff {
+  opacity: 1;
+}
 .sp-body {
   display: flex;
   align-items: center;
@@ -1043,6 +1057,16 @@ option {
 .sp-chip.key {
   color: #a8a2ec;
   border-color: #7f77dd;
+}
+/* First chip in the palette, and the one that isn't a new empty step —
+   separated so it doesn't read as another step type. */
+.sp-chip.paste {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+  margin-right: 3px;
 }
 .sp-log {
   border-top: 1px solid var(--border, #2f353d);
@@ -1423,6 +1447,23 @@ button.tp-swatch:not(:disabled):hover {
 .sp-warn-inline {
   color: #f0a94b;
 }
+/* "There are edits here that the script itself doesn't have yet." Amber rather
+   than red: nothing is wrong, and nothing is lost — the draft is kept. */
+.sp-unsaved {
+  font-size: 11px;
+  color: #f0a94b;
+  border: 0.5px solid #f0a94b;
+  border-radius: 999px;
+  padding: 1px 7px;
+  flex: none;
+}
+/* Pressing 儲存 has to look like it did something. Two seconds, then the button
+   goes back to its quiet disabled state, which is itself the standing answer to
+   "did that save?". */
+.sp-name button.saved {
+  color: #7cf5b0;
+  border-color: #7cf5b0;
+}
 /* Summary of the filter/pick config on the step row itself. */
 .sp-summary {
   font-size: 11px;
@@ -1671,4 +1712,20 @@ button.tp-swatch:not(:disabled):hover {
 .tp-warn {
   color: #f0a94b;
   font-size: 11px;
+}
+
+/* Toolbar hint: script edits are being kept somewhere behind this button. Same
+   amber as 未儲存 inside the panel, so the two read as one idea. */
+.has-draft {
+  position: relative;
+}
+.has-draft::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f0a94b;
 }

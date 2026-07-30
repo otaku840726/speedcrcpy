@@ -41,7 +41,18 @@ export interface ScriptTemplate {
  */
 export const MAX_TEMPLATE_BASE64 = 4_000_000;
 
-export type ScriptStep =
+/**
+ * A step, plus the switch every step carries.
+ *
+ * `disabled` keeps a step in the script but out of the run. The settings that
+ * take longest to get right — a framed template, a tuned threshold, a picked
+ * region — are exactly what deleting a step throws away, so trying a script
+ * without one step has to be possible without losing it. A disabled loop or
+ * if-step takes everything nested inside it out of the run too.
+ */
+export type ScriptStep = ScriptStepKind & { disabled?: boolean };
+
+type ScriptStepKind =
   | { type: "tap"; x: number; y: number }
   | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }
   /** Fixed delay when min === max, otherwise a uniform random delay in between. */
@@ -121,6 +132,24 @@ export type ScriptStep =
       then: ScriptStep[];
       else?: ScriptStep[];
     };
+
+/** What each step is called. Shared so the runner's log says the same word the
+ * editor puts on the row, and a log line can be matched to what produced it. */
+export const SCRIPT_STEP_LABELS: Record<ScriptStep["type"], string> = {
+  findTap: "找圖點擊",
+  ifImage: "若找到圖",
+  tapText: "依文字點擊",
+  ifText: "若文字含",
+  ifNumber: "讀取數值",
+  tap: "點擊",
+  swipe: "滑動",
+  wait: "等待",
+  waitColor: "等待顏色",
+  ifColor: "若顏色",
+  loop: "重複",
+  text: "輸入文字",
+  key: "按鍵",
+};
 
 /**
  * When a script wants to run. `persistent` keeps it running whenever nothing

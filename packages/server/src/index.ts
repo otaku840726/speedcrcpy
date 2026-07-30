@@ -12,6 +12,7 @@ import { SessionManager } from "./scrcpy/session-manager.js";
 import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
 import { ScriptEngine } from "./scripts/engine.js";
 import { Scheduler } from "./scripts/scheduler.js";
+import { DraftStore } from "./scripts/draft-store.js";
 import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
 
@@ -37,6 +38,7 @@ const thumbnailManager = new ThumbnailManager(adbManager, config.thumbnailInterv
 const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1000);
 const displayManager = new DisplayManager(adbManager, config.dataDir);
 const scriptStore = new ScriptStore(config.dataDir);
+const draftStore = new DraftStore(config.dataDir);
 const scriptEngine = new ScriptEngine(adbManager);
 // A script screencaps constantly; let the thumbnail cache ride along on those
 // frames rather than capturing the same device again on its own timer.
@@ -50,7 +52,7 @@ const sessionManager = new SessionManager(
   (serial, active) => screenManager.setSessionActive(serial, active),
   displayManager,
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, scriptEngine, scheduler);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, draftStore, scriptEngine, scheduler);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);

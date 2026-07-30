@@ -2,6 +2,7 @@ import {
   type ScriptCandidate,
   type ScriptPick,
   type ScriptSelection,
+  SCRIPT_STEP_LABELS,
   scriptSelect,
 } from "@speedcrcpy/shared";
 import type {
@@ -197,6 +198,14 @@ export class ScriptEngine {
   private async runSteps(adb: Adb, run: Run, steps: ScriptStep[]): Promise<void> {
     for (const step of steps) {
       this.checkStop(run);
+      // Switched off, not deleted. Said out loud rather than skipped in silence:
+      // a script that does nothing where you expected something is a worse
+      // puzzle than a log line saying which step is parked. A disabled loop or
+      // if-step never runs, so its children never run either.
+      if (step.disabled) {
+        this.log(run, `略過(已關閉):${SCRIPT_STEP_LABELS[step.type]}`);
+        continue;
+      }
       await this.runStep(adb, run, step);
     }
   }
