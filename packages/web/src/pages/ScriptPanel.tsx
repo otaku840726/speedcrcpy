@@ -1,4 +1,4 @@
-import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -349,6 +349,20 @@ function StepRow({
     </button>
   );
 
+  /** Search area, for every step that takes one — text and image alike. Both
+   * only look at what you framed, so the reasons to set one differ in degree,
+   * not in kind: the tooltip says which applies. */
+  const regionChipFor = (region: ScriptRegion | undefined, unsetLabel: string, unsetTitle: string) => (
+    <button
+      className={`sp-pick${region ? "" : " warn"}`}
+      onClick={() => pick("region", (r) => r.region && set({ region: r.region }))}
+      title={region ? "重新框選搜尋範圍" : unsetTitle}
+    >
+      <Icon name="crosshair" size={13} />
+      {region ? `${(region.w * 100).toFixed(0)}×${(region.h * 100).toFixed(0)}%` : unsetLabel}
+    </button>
+  );
+
   let body: React.ReactNode = null;
   switch (step.type) {
     case "tap":
@@ -421,6 +435,11 @@ function StepRow({
               <Icon name="image" size={16} />
             )}
           </button>
+          {regionChipFor(
+            step.region,
+            "整張",
+            "未框選範圍:整張畫面(比對慢約 30 倍,且畫面別處若有相似圖案也可能被選中)",
+          )}
           相似度 <input className="sp-num" value={Math.round(step.threshold * 100)} onChange={(e) => set({ threshold: num(e.target.value) / 100 })} />%
           <button
             className="sp-probe"
@@ -455,17 +474,10 @@ function StepRow({
     case "tapText":
     case "ifText":
     case "ifNumber": {
-      const regionChip = (
-        <button
-          className={`sp-pick${step.region ? "" : " warn"}`}
-          onClick={() => pick("region", (r) => r.region && set({ region: r.region }))}
-          title={step.region ? "重新框選辨識範圍" : "未框選範圍:整張畫面(慢約 30 倍,座標較粗略)"}
-        >
-          <Icon name="crosshair" size={13} />
-          {step.region
-            ? `${(step.region.w * 100).toFixed(0)}×${(step.region.h * 100).toFixed(0)}%`
-            : "整張(慢)"}
-        </button>
+      const regionChip = regionChipFor(
+        step.region,
+        "整張(慢)",
+        "未框選範圍:整張畫面(慢約 30 倍,座標較粗略)",
       );
       body =
         step.type === "ifNumber" ? (

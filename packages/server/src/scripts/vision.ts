@@ -199,8 +199,16 @@ export async function findTemplate(
     throw new Error("template could not be decoded");
   }
   if (needle.rows > haystack.rows || needle.cols > haystack.cols) {
+    // Reachable by configuration now that steps can be given a search region:
+    // frame a region smaller than the template and every poll would fail here.
+    // Sizes are read before cleanup — deleting a Mat invalidates its getters.
+    const message = region
+      ? `圖像(${needle.cols}×${needle.rows})比搜尋範圍(${haystack.cols}×${haystack.rows})還大` +
+        `,請框大搜尋範圍或重新框選較小的圖像`
+      : `圖像(${needle.cols}×${needle.rows})比畫面(${haystack.cols}×${haystack.rows})還大` +
+        `,請重新框選圖像`;
     cleanup();
-    throw new Error("template is larger than the search area");
+    throw new Error(message);
   }
 
   const result = new cv.Mat();
