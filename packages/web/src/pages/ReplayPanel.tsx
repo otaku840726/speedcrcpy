@@ -152,6 +152,68 @@ export function ReplayPanel({ serial, onClose }: { serial: string; onClose: () =
     return data.events.map((e) => ((e.at - first) / width) * 100).filter((p) => p >= 0 && p <= 100);
   }, [shots, data]);
 
+  /**
+   * Move by whole frames. At four hundred frames the scrubber gives each one
+   * less than a pixel, so landing on the one you want by dragging is not a
+   * skill anyone should need — this is the way to arrive, not a shortcut.
+   * Stepping means you are looking at something, so it stops playback and lets
+   * go of the newest frame.
+   */
+  const step = useCallback(
+    (delta: number) => {
+      setPlaying(false);
+      setFollow(false);
+      setAt((n) => Math.min(Math.max(0, n + delta), Math.max(0, shots.length - 1)));
+    },
+    [shots.length],
+  );
+
+  /**
+   * A press steps once through `onClick`, which is also what the keyboard fires
+   * on a focused button — stepping must not depend on a pointer existing.
+   * Holding is the extra: after a pause it repeats, and the click that arrives
+   * on release is swallowed so a held button does not step once more at the end.
+   */
+  const hold = useRef<ReturnType<typeof setInterval>>(undefined);
+  const holdDelay = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const repeated = useRef(false);
+  const startHold = (delta: number) => {
+    repeated.current = false;
+    holdDelay.current = setTimeout(() => {
+      hold.current = setInterval(() => {
+        repeated.current = true;
+        step(delta);
+      }, 140);
+    }, 400);
+  };
+  const stopHold = () => {
+    clearTimeout(holdDelay.current);
+    clearInterval(hold.current);
+  };
+  const clickStep = (delta: number) => {
+    if (repeated.current) {
+      repeated.current = false;
+      return;
+    }
+    step(delta);
+  };
+  useEffect(() => stopHold, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // A select or an input has first claim on the arrow keys.
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowLeft") step(e.shiftKey ? -10 : -1);
+      else if (e.key === "ArrowRight") step(e.shiftKey ? 10 : 1);
+      else if (e.key === " ") setPlaying((v) => !v);
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step]);
+
   const saveSettings = async (patch: Partial<ReplaySettings>) => {
     if (!data) return;
     const next = { ...data.settings, ...patch };
@@ -251,9 +313,32 @@ export function ReplayPanel({ serial, onClose }: { serial: string; onClose: () =
           </div>
 
           <div className="sp-replay-controls">
-            <button onClick={() => { setFollow(false); setPlaying((v) => !v); }} title={playing ? "暫停" : "播放"}>
+            <button
+              disabled={at === 0}
+              onClick={() => clickStep(-1)}
+              onPointerDown={() => startHold(-1)}
+              onPointerUp={stopHold}
+              onPointerLeave={stopHold}
+              onPointerCancel={stopHold}
+              title="前一張(←,按住連續)"
+            >
+              <Icon name="prev" size={13} />
+            </button>
+            <button onClick={() => { setFollow(false); setPlaying((v) => !v); }} title={playing ? "暫停(空白鍵)" : "播放(空白鍵)"}>
               <Icon name={playing ? "stop" : "play"} size={13} />
             </button>
+            <button
+              disabled={at >= shots.length - 1}
+              onClick={() => clickStep(1)}
+              onPointerDown={() => startHold(1)}
+              onPointerUp={stopHold}
+              onPointerLeave={stopHold}
+              onPointerCancel={stopHold}
+              title="下一張(→,按住連續)"
+            >
+              <Icon name="next" size={13} />
+            </button>
+            <span className="sp-replay-gap" />
             {SPEEDS.map((s) => (
               <button key={s} className={speed === s ? "on" : ""} onClick={() => setSpeed(s)}>
                 {SPEED_LABELS[s]}
@@ -264,7 +349,8 @@ export function ReplayPanel({ serial, onClose }: { serial: string; onClose: () =
             </button>
             <span style={{ flex: 1 }} />
             <span className="muted">
-              {at + 1}/{shots.length} · {current ? stamp(current.at) : ""}
+              {at === 0 ? "最舊的一張" : at >= shots.length - 1 ? "最新的一張" : `${at + 1}/${shots.length}`} ·{" "}
+              {current ? stamp(current.at) : ""}
             </span>
           </div>
 

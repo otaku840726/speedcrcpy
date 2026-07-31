@@ -1804,6 +1804,15 @@ button.tp-swatch:not(:disabled):hover {
   padding: 3px 8px;
   white-space: nowrap;
 }
+/* Keeps the transport group away from the speed group, so the button next to
+   下一張 is never 30× by accident. */
+.sp-replay-gap {
+  width: 9px;
+}
+.sp-replay-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .sp-replay-controls .muted {
   font-size: 11px;
   white-space: nowrap;
