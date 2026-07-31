@@ -105,8 +105,11 @@ export class ManagedSession {
 
   attach(viewer: SessionViewer): void {
     this.viewers.add(viewer);
-    // First viewer controls; later viewers join view-only.
-    this.controllingViewer ??= viewer;
+    // Alone on the device: you opened it to use it, and a reconnect after a
+    // dropped socket should put you back where you were. With anyone else
+    // already attached, join view-only even when nobody is driving — control is
+    // asked for, never handed out.
+    if (this.viewers.size === 1) this.controllingViewer ??= viewer;
     if (this.lingerTimer) {
       clearTimeout(this.lingerTimer);
       this.lingerTimer = undefined;
@@ -117,9 +120,11 @@ export class ManagedSession {
     this.viewers.delete(viewer);
     this.viewerCaps.delete(viewer);
     if (this.controllingViewer === viewer) {
-      // Hand control to the longest-connected remaining viewer.
-      this.controllingViewer = this.viewers.values().next().value;
-      this.controllingViewer?.notifyControlChanged(true);
+      // Nobody inherits it. Someone who opened a session to watch did not ask
+      // to drive a real phone, and promoting them the moment the driver leaves
+      // turns their next stray tap into a real one. The device stays
+      // uncontrolled until a viewer presses 取得控制.
+      this.controllingViewer = undefined;
     }
     // lingerMs <= 0: keep the session warm indefinitely (instant reattach, at
     // the cost of the device encoding continuously with no viewer).
