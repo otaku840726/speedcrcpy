@@ -4,16 +4,6 @@ import { deflateSync } from "node:zlib";
 const THUMB_WIDTH = 160;
 
 /**
- * Capture a small PNG thumbnail of a device's screen via `screencap`.
- *
- * The heavy transfer (raw RGBA, several MB) stays on the fast local adb link;
- * we downscale + PNG-encode server-side and hand the browser a tiny image
- * (~10-20 KB), which is what matters when many device cards refresh over WAN.
- *
- * Returns null when shell v2 (needed for binary-safe stdout) is unavailable or
- * the capture can't be parsed.
- */
-/**
  * Encode a thumbnail from a frame someone already captured.
  *
  * A running script screencaps every poll, and the thumbnail cache was
@@ -25,30 +15,6 @@ export function thumbnailFromFrame(frame: { width: number; height: number; pixel
   const targetW = Math.min(THUMB_WIDTH, frame.width);
   const targetH = Math.max(1, Math.round((frame.height * targetW) / frame.width));
   return encodePng(targetW, targetH, downscale(frame.pixels, frame.width, frame.height, targetW, targetH));
-}
-
-export async function captureThumbnail(adb: Adb): Promise<Buffer | null> {
-  const shell = adb.subprocess.shellProtocol;
-  if (!shell || !shell.isSupported) return null;
-
-  // `screencap` (no -p) writes raw pixels; shell v2 keeps the binary intact.
-  const { stdout, exitCode } = await shell.spawnWait("screencap");
-  if (exitCode !== 0 || stdout.byteLength < 16) return null;
-
-  const view = new DataView(stdout.buffer, stdout.byteOffset, stdout.byteLength);
-  const width = view.getUint32(0, true);
-  const height = view.getUint32(4, true);
-  if (width === 0 || height === 0 || width > 8192 || height > 8192) return null;
-
-  // Header is 12 bytes (w,h,format) or 16 (+colorSpace on newer Android).
-  const headerLen = stdout.byteLength - width * height * 4;
-  if (headerLen !== 12 && headerLen !== 16) return null;
-  const pixels = stdout.subarray(headerLen);
-
-  const targetW = Math.min(THUMB_WIDTH, width);
-  const targetH = Math.max(1, Math.round((height * targetW) / width));
-  const small = downscale(pixels, width, height, targetW, targetH);
-  return encodePng(targetW, targetH, small);
 }
 
 /**

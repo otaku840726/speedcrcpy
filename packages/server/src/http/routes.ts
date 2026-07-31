@@ -386,27 +386,29 @@ export function registerRoutes(
     return scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" });
   });
 
-  // ---- replays ----
+  // ---- replay ----
   //
-  // A run's timelapse: the frames it captured anyway, downscaled. Read-only
-  // apart from the recording settings, which is what the panel's usage line
-  // needs to be able to change.
+  // A rolling timelapse of each device, built from screenshots taken for other
+  // reasons (the thumbnail loop while idle, a script's own captures while one
+  // runs). Read-only apart from the recording settings.
 
-  app.get<{ Querystring: { scriptId?: string } }>("/api/replays", async (request) => ({
-    runs: replayStore.list(request.query.scriptId),
-    usedBytes: replayStore.usage(),
-    settings: replayStore.current(),
-  }));
+  app.get<{ Params: { serial: string }; Querystring: { from?: string; to?: string } }>(
+    "/api/devices/:serial/replay",
+    async (request) => {
+      const to = Number(request.query.to) || Date.now();
+      const from = Number(request.query.from) || 0;
+      return {
+        ...replayStore.window(request.params.serial, from, to),
+        settings: replayStore.current(),
+        usedBytes: replayStore.usage(),
+      };
+    },
+  );
 
-  app.get<{ Params: { runId: string } }>("/api/replays/:runId", async (request, reply) => {
-    const run = replayStore.get(request.params.runId);
-    return run ?? reply.code(404).send({ error: "not_found" });
-  });
-
-  /** One frame. Immutable once written, so it can be cached hard — a player
-   * scrubbing back and forth must not re-fetch what it already has. */
-  app.get<{ Params: { runId: string; n: string } }>("/api/replays/:runId/frames/:n", async (request, reply) => {
-    const path = replayStore.framePath(request.params.runId, Number(request.params.n));
+  /** One frame, addressed by when it was taken. Immutable once written, so
+   * scrubbing back and forth never re-fetches. */
+  app.get<{ Params: { serial: string; at: string } }>("/api/devices/:serial/replay/:at", async (request, reply) => {
+    const path = replayStore.framePath(request.params.serial, Number(request.params.at));
     if (!path) return reply.code(404).send({ error: "not_found" });
     try {
       return reply

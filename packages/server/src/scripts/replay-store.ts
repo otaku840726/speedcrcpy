@@ -1,62 +1,70 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ScriptLogEntry } from "@speedcrcpy/shared";
 import { framePng, type Frame } from "./vision.js";
 
-/** One recorded run: what to show in the picker before opening it. */
-export interface ReplaySummary {
-  runId: string;
-  serial: string;
-  scriptId: string;
-  scriptName: string;
-  startedAt: number;
-  endedAt: number | null;
-  outcome: "running" | "done" | "stopped" | "error";
-  frames: number;
+/** One recorded screen, addressed by when it was taken. */
+export interface Shot {
+  at: number;
   bytes: number;
 }
 
-/** A recorded run in full: the frames, when each was taken, and the run's log so
- * the player can say what the script was doing at that moment. */
-export interface ReplayIndex extends ReplaySummary {
-  /** Pixel size of the stored frames (they are downscaled). */
-  width: number;
-  height: number;
+/** Something a script did, to show against the picture from that moment. */
+export interface ReplayEvent {
+  at: number;
+  message: string;
+  scriptName: string;
+}
+
+export interface ReplayWindow {
   shots: { at: number }[];
-  log: ScriptLogEntry[];
+  events: ReplayEvent[];
+  /** What exists on disk for this device, whatever window was asked for. */
+  first: number | null;
+  last: number | null;
 }
 
 export interface ReplaySettings {
   enabled: boolean;
-  /** Floor between recorded frames. A findTap step captures roughly twice a
-   * second; without this, one waiting screen would fill the whole allowance. */
+  /**
+   * Floor between recorded frames. Nothing is captured for the replay, so this
+   * only ever throttles: idle cadence is whatever the thumbnail loop runs at
+   * (10s by default), and a running script offers frames far faster than this.
+   */
   intervalSec: number;
-  /** Ceiling on everything under `replays/`, oldest run evicted first. */
+  /** Ceiling on everything under `replays/`, oldest frame evicted first. */
   maxMb: number;
   /** Stored frame width in pixels. */
   width: number;
 }
 
 const INDEX_FILE = "index.json";
+/** Rewriting a device's index on every frame would be the most frequent write
+ * in the process; a run in progress only needs it fresh enough to follow. */
+const INDEX_FLUSH_MS = 5_000;
 
 /**
- * Screenshots a run already took, kept as a timelapse of what the device was
- * doing.
+ * A rolling timelapse of each device, made of screenshots that were taken
+ * anyway.
  *
- * No frame is captured for this: a script screencaps on every poll anyway, and
- * those frames are handed here on the way past (the same donation that feeds the
- * thumbnail cache). The consequence is visible in playback and is the honest
- * one — a step that needs no picture (a wait, a swipe, typing) produces no
- * frames, so the timeline has gaps where the script wasn't looking.
+ * Two sources, one recording: the thumbnail cache screencaps every connected
+ * device on its own timer, and a running script screencaps far more often.
+ * Both hand their frame here on the way past, so the device is recorded
+ * whether or not anything is automating it — the difference a script makes is
+ * that the timeline gets denser and gains events to read against the picture.
  *
- * Storage is bounded by total size rather than by a number of runs, so how far
- * back you can see depends on how long the runs were.
+ * Bounded by total size, oldest frame first. How far back that reaches depends
+ * on how many devices are connected and how much of the time scripts were
+ * running, which is why the panel shows the span rather than a promise.
  */
 export class ReplayStore {
   private readonly root: string;
-  private readonly runs = new Map<string, ReplayIndex>();
-  /** Per-run recording state, only while it is running. */
-  private readonly active = new Map<string, { dir: string; lastAt: number; writing: boolean }>();
+  /** Per device, in capture order. */
+  private readonly shots = new Map<string, Shot[]>();
+  private readonly events = new Map<string, ReplayEvent[]>();
+  private readonly lastShotAt = new Map<string, number>();
+  private readonly dirty = new Set<string>();
+  private flushedAt = 0;
+  private total = 0;
 
   constructor(
     dataDir: string,
@@ -76,159 +84,158 @@ export class ReplayStore {
     return this.settings;
   }
 
-  /** Bytes on disk across every recorded run. */
   usage(): number {
-    let total = 0;
-    for (const run of this.runs.values()) total += run.bytes;
-    return total;
+    return this.total;
   }
 
-  list(scriptId?: string): ReplaySummary[] {
-    return [...this.runs.values()]
-      .filter((run) => !scriptId || run.scriptId === scriptId)
-      .sort((a, b) => b.startedAt - a.startedAt)
-      .map(({ shots: _shots, log: _log, ...summary }) => summary);
-  }
-
-  get(runId: string): ReplayIndex | undefined {
-    return this.runs.get(runId);
-  }
-
-  framePath(runId: string, n: number): string | undefined {
-    const run = this.runs.get(runId);
-    if (!run || n < 0 || n >= run.shots.length) return undefined;
-    return join(this.root, runId, frameName(n));
-  }
-
-  begin(info: Omit<ReplaySummary, "endedAt" | "outcome" | "frames" | "bytes">): void {
-    if (!this.settings.enabled) return;
-    const dir = join(this.root, info.runId);
-    mkdirSync(dir, { recursive: true });
-    this.runs.set(info.runId, {
-      ...info,
-      endedAt: null,
-      outcome: "running",
-      frames: 0,
-      bytes: 0,
-      width: 0,
-      height: 0,
-      shots: [],
-      log: [],
-    });
-    this.active.set(info.runId, { dir, lastAt: 0, writing: false });
-    this.writeIndex(info.runId);
+  devices(): string[] {
+    return [...this.shots.keys()];
   }
 
   /**
-   * Offer a frame the run just captured. Dropped unless the floor has passed,
-   * and dropped while a previous frame is still being written — encoding is
-   * synchronous, and a run must never wait on its own recording.
+   * Everything recorded for a device between two times. Events are included
+   * from slightly before the window so a run that started earlier still says
+   * what it was doing.
    */
-  offer(runId: string, frame: Frame): void {
-    const state = this.active.get(runId);
-    const run = this.runs.get(runId);
-    if (!state || !run || state.writing) return;
+  window(serial: string, from: number, to: number): ReplayWindow {
+    const shots = this.shots.get(serial) ?? [];
+    const events = this.events.get(serial) ?? [];
+    return {
+      shots: shots.filter((s) => s.at >= from && s.at <= to).map(({ at }) => ({ at })),
+      events: events.filter((e) => e.at >= from && e.at <= to),
+      first: shots[0]?.at ?? null,
+      last: shots.at(-1)?.at ?? null,
+    };
+  }
+
+  framePath(serial: string, at: number): string | undefined {
+    const shots = this.shots.get(serial) ?? [];
+    return shots.some((s) => s.at === at) ? join(this.root, serial, `${at}.png`) : undefined;
+  }
+
+  /**
+   * Take a frame someone else captured. Dropped unless the floor has passed —
+   * during a script run they arrive about twice a second.
+   */
+  offer(serial: string, frame: Frame): void {
+    if (!this.settings.enabled) return;
     const now = Date.now();
-    if (now - state.lastAt < this.settings.intervalSec * 1000) return;
-    state.lastAt = now;
-    state.writing = true;
+    if (now - (this.lastShotAt.get(serial) ?? 0) < this.settings.intervalSec * 1000) return;
+    this.lastShotAt.set(serial, now);
     try {
       const png = framePng(frame, this.settings.width);
-      const n = run.shots.length;
-      writeFileSync(join(state.dir, frameName(n)), png);
-      run.shots.push({ at: now });
-      run.frames = run.shots.length;
-      run.bytes += png.byteLength;
-      if (!run.width) {
-        const scale = Math.min(1, this.settings.width / frame.width);
-        run.width = Math.max(1, Math.round(frame.width * scale));
-        run.height = Math.max(1, Math.round(frame.height * scale));
-      }
-      // Rewritten every frame so the player can follow a run in progress.
-      this.writeIndex(runId);
+      const dir = join(this.root, serial);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${now}.png`), png);
+      const shots = this.shots.get(serial) ?? [];
+      shots.push({ at: now, bytes: png.byteLength });
+      this.shots.set(serial, shots);
+      this.total += png.byteLength;
+      this.dirty.add(serial);
+      this.flush(now);
+      this.prune();
     } catch {
-      /* a dropped frame is not worth failing a run over */
-    } finally {
-      state.writing = false;
+      /* a dropped frame is not worth failing the caller's capture over */
     }
   }
 
-  finish(runId: string, outcome: ReplaySummary["outcome"], log: ScriptLogEntry[]): void {
-    const run = this.runs.get(runId);
-    this.active.delete(runId);
-    if (!run) return;
-    run.endedAt = Date.now();
-    run.outcome = outcome;
-    run.log = log;
-    // A run that recorded nothing (all waits, or recording switched off
-    // mid-run) is not worth a row in the picker.
-    if (!run.shots.length) {
-      this.remove(runId);
-      return;
-    }
-    this.writeIndex(runId);
-    this.prune();
+  /** A line from a script run, kept beside the pictures of the same moment. */
+  note(serial: string, scriptName: string, message: string): void {
+    if (!this.settings.enabled) return;
+    const events = this.events.get(serial) ?? [];
+    events.push({ at: Date.now(), message, scriptName });
+    this.events.set(serial, events);
+    this.dirty.add(serial);
+    this.flush(Date.now());
   }
 
-  /** Oldest-first eviction, by whole runs: half a run is not worth keeping. */
+  private flush(now: number, force = false): void {
+    if (!force && now - this.flushedAt < INDEX_FLUSH_MS) return;
+    this.flushedAt = now;
+    for (const serial of this.dirty) {
+      const dir = join(this.root, serial);
+      if (!existsSync(dir)) continue;
+      writeFileSync(
+        join(dir, INDEX_FILE),
+        JSON.stringify({ shots: this.shots.get(serial) ?? [], events: this.events.get(serial) ?? [] }),
+      );
+    }
+    this.dirty.clear();
+  }
+
+  /**
+   * Oldest frame first, across every device — the cap is on the recording as a
+   * whole, so a device that ran a script all night does not get to keep its
+   * history at the expense of one that only has a day of idle frames.
+   */
   private prune(): void {
     const limit = this.settings.maxMb * 1024 * 1024;
-    const oldestFirst = [...this.runs.values()].sort((a, b) => a.startedAt - b.startedAt);
-    let total = this.usage();
-    for (const run of oldestFirst) {
-      if (total <= limit) break;
-      if (this.active.has(run.runId)) continue; // never evict what is recording now
-      total -= run.bytes;
-      this.remove(run.runId);
+    if (this.total <= limit) return;
+    while (this.total > limit) {
+      let oldest: { serial: string; shot: Shot } | undefined;
+      for (const [serial, shots] of this.shots) {
+        const first = shots[0];
+        if (first && (!oldest || first.at < oldest.shot.at)) oldest = { serial, shot: first };
+      }
+      if (!oldest) break;
+      const shots = this.shots.get(oldest.serial)!;
+      shots.shift();
+      this.total -= oldest.shot.bytes;
+      try {
+        unlinkSync(join(this.root, oldest.serial, `${oldest.shot.at}.png`));
+      } catch {
+        /* already gone */
+      }
+      // Events older than the oldest surviving picture have nothing to caption.
+      const cutoff = shots[0]?.at ?? Infinity;
+      const events = (this.events.get(oldest.serial) ?? []).filter((e) => e.at >= cutoff);
+      this.events.set(oldest.serial, events);
+      this.dirty.add(oldest.serial);
+      if (!shots.length) {
+        this.shots.delete(oldest.serial);
+        this.events.delete(oldest.serial);
+        rmSync(join(this.root, oldest.serial), { recursive: true, force: true });
+        this.dirty.delete(oldest.serial);
+      }
     }
+    this.flush(Date.now(), true);
   }
 
-  private remove(runId: string): void {
-    this.runs.delete(runId);
-    this.active.delete(runId);
-    rmSync(join(this.root, runId), { recursive: true, force: true });
-  }
-
-  private writeIndex(runId: string): void {
-    const run = this.runs.get(runId);
-    if (!run) return;
-    writeFileSync(join(this.root, runId, INDEX_FILE), JSON.stringify(run));
-  }
-
-  /** Read what previous sessions recorded. A run left as "running" by a server
-   * that stopped mid-run is closed here — it is not going to produce more. */
+  /** Read back what earlier sessions recorded, trusting the files over the
+   * index: a process killed between a frame and a flush leaves both behind. */
   private load(): void {
     for (const entry of readdirSync(this.root, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      const file = join(this.root, entry.name, INDEX_FILE);
-      if (!existsSync(file)) continue;
-      try {
-        const run = JSON.parse(readFileSync(file, "utf8")) as ReplayIndex;
-        if (run.outcome === "running") {
-          run.outcome = "error";
-          run.endedAt = run.shots.at(-1)?.at ?? run.startedAt;
+      const dir = join(this.root, entry.name);
+      const shots: Shot[] = [];
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith(".png")) continue;
+        const at = Number(file.slice(0, -4));
+        if (!Number.isFinite(at)) continue;
+        try {
+          shots.push({ at, bytes: statSync(join(dir, file)).size });
+        } catch {
+          /* raced with a prune */
         }
-        run.bytes = dirBytes(join(this.root, entry.name));
-        this.runs.set(run.runId, run);
-      } catch {
-        /* unreadable index — drop the directory rather than keep a run nobody can play */
-        rmSync(join(this.root, entry.name), { recursive: true, force: true });
+      }
+      if (!shots.length) {
+        rmSync(dir, { recursive: true, force: true });
+        continue;
+      }
+      shots.sort((a, b) => a.at - b.at);
+      this.shots.set(entry.name, shots);
+      this.total += shots.reduce((sum, s) => sum + s.bytes, 0);
+
+      const index = join(dir, INDEX_FILE);
+      if (existsSync(index)) {
+        try {
+          const saved = JSON.parse(readFileSync(index, "utf8")) as { events?: ReplayEvent[] };
+          this.events.set(entry.name, saved.events ?? []);
+        } catch {
+          /* an unreadable index costs the captions, not the pictures */
+        }
       }
     }
     this.prune();
   }
-}
-
-const frameName = (n: number): string => `${String(n).padStart(5, "0")}.png`;
-
-function dirBytes(dir: string): number {
-  let total = 0;
-  for (const entry of readdirSync(dir)) {
-    try {
-      total += statSync(join(dir, entry)).size;
-    } catch {
-      /* raced with a prune */
-    }
-  }
-  return total;
 }

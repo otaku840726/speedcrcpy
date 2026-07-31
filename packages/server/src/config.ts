@@ -74,7 +74,7 @@ const ConfigSchema = z.object({
   /** Floor between recorded frames, in seconds. */
   replayInterval: z.coerce.number().min(0.2).max(60).default(2),
   /** Ceiling on all recordings; the oldest run is evicted when it is reached. */
-  replayMaxMb: z.coerce.number().int().min(10).max(20_000).default(200),
+  replayMaxMb: z.coerce.number().int().min(10).max(20_000).default(500),
   /** Stored frame width in pixels — enough to read a button, not a whole UI. */
   replayWidth: z.coerce.number().int().min(120).max(1080).default(360),
 });

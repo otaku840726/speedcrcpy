@@ -49,9 +49,15 @@ const replayStore = new ReplayStore(config.dataDir, {
 const scriptEngine = new ScriptEngine(adbManager);
 // A script screencaps constantly; let the thumbnail cache ride along on those
 // frames rather than capturing the same device again on its own timer.
-scriptEngine.onCapture((serial, frame) => thumbnailManager.offer(serial, frame));
-// Those same frames are the replay: a run's own screenshots, kept as a timelapse.
-scriptEngine.onRecord(replayStore);
+scriptEngine.onCapture((serial, frame) => {
+  thumbnailManager.offer(serial, frame);
+  replayStore.offer(serial, frame);
+});
+// What a script is doing, to read against the picture from the same moment.
+scriptEngine.onLog((serial, scriptName, message) => replayStore.note(serial, scriptName, message));
+// And while nothing is automating the device, the thumbnail loop's own captures
+// keep the replay running — no screencap exists solely for the recording.
+thumbnailManager.onCapture((serial, frame) => replayStore.offer(serial, frame));
 const scheduler = new Scheduler(scriptStore, scriptEngine);
 const sessionManager = new SessionManager(
   adbManager,

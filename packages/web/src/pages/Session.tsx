@@ -22,6 +22,7 @@ import { attachInput } from "../core/input";
 import { SessionClient, type TransportKind } from "../core/session-client";
 import { VideoPipeline } from "../core/video-pipeline";
 import { DeviceRail } from "./DeviceRail";
+import { ReplayPanel } from "./ReplayPanel";
 import { ScriptPanel } from "./ScriptPanel";
 
 const isWideScreen = () => (typeof window !== "undefined" ? window.innerWidth >= 700 : true);
@@ -90,6 +91,7 @@ export function Session({
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
   const [scriptsOpen, setScriptsOpen] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
   /** Unsaved script edits waiting somewhere. With the panel shut there is
    * nothing else on screen to say so, and the whole point of keeping a draft is
    * that you can leave and come back. */
@@ -511,6 +513,13 @@ export function Session({
                   <Icon name="motherboard" />
                 </button>
                 <button
+                  title="回放:這台裝置的縮時"
+                  onClick={() => setReplayOpen((v) => !v)}
+                  style={replayOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                >
+                  <Icon name="history" />
+                </button>
+                <button
                   className={!scriptsOpen && hasDrafts ? "has-draft" : undefined}
                   title={hasDrafts ? "自動化腳本(有未儲存的編輯)" : "自動化腳本"}
                   onClick={() => setScriptsOpen((v) => !v)}
@@ -566,6 +575,7 @@ export function Session({
             )}
           </>
         )}
+        {replayOpen && <ReplayPanel serial={serial} onClose={() => setReplayOpen(false)} />}
         {scriptsOpen && <ScriptPanel serial={serial} onClose={() => setScriptsOpen(false)} />}
         {clipboardToast !== undefined && (
           <button

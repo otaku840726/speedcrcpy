@@ -1803,12 +1803,21 @@ button.tp-swatch:not(:disabled):hover {
 .sp-replay-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   font-size: 11px;
 }
+/* CJK labels must never break to vertical (最快 -> 最/快), and the timestamp
+   goes to its own line rather than squeezing the buttons. */
 .sp-replay-controls button {
   font-size: 11px;
   padding: 3px 8px;
+  white-space: nowrap;
+}
+.sp-replay-controls .muted {
+  font-size: 11px;
+  white-space: nowrap;
+  margin-left: auto;
 }
 .sp-replay-controls button.on {
   color: var(--accent);
@@ -1834,4 +1843,25 @@ button.tp-swatch:not(:disabled):hover {
   gap: 6px;
   font-size: 11px;
   color: #f0a94b;
+}
+
+/* Scrubber with markers for the moments a script logged something — otherwise
+   an hour of idle frames has nothing to aim at. */
+.sp-replay-track {
+  position: relative;
+}
+.sp-replay-track input {
+  width: 100%;
+  margin: 0;
+}
+.sp-replay-tick {
+  position: absolute;
+  top: -2px;
+  width: 2px;
+  height: 7px;
+  background: #f0a94b;
+  pointer-events: none;
+}
+.sp-replay-script {
+  color: var(--accent);
 }

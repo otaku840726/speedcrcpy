@@ -1,5 +1,6 @@
 import type { AdbManager } from "../adb/adb-manager.js";
-import { captureThumbnail, thumbnailFromFrame } from "./screenshot.js";
+import { capture as screencap, type Frame } from "../scripts/vision.js";
+import { thumbnailFromFrame } from "./screenshot.js";
 
 /** Never re-capture a device more than once per this window (coalesce + floor). */
 const CACHE_MIN_INTERVAL_MS = 3_000;
@@ -31,11 +32,19 @@ export class ThumbnailManager {
   private readonly inFlight = new Map<string, Promise<Buffer | null>>();
   private timer: NodeJS.Timeout | undefined;
 
+  /** Anyone else who wants the frame this class just captured — the replay
+   * recorder, which would otherwise have to screencap the same device again. */
+  private onFrame: ((serial: string, frame: Frame) => void) | undefined;
+
   constructor(
     private readonly adbManager: AdbManager,
     /** Background prefetch cadence in ms; <= 0 disables the loop entirely. */
     private readonly backgroundIntervalMs: number,
   ) {}
+
+  onCapture(handler: (serial: string, frame: Frame) => void): void {
+    this.onFrame = handler;
+  }
 
   start(): void {
     if (this.backgroundIntervalMs <= 0) return;
@@ -112,8 +121,12 @@ export class ThumbnailManager {
     if (!pending) {
       pending = (async () => {
         const adb = await this.adbManager.getAdb(serial);
-        const png = await captureThumbnail(adb);
-        if (png) this.cache.set(serial, { png, at: Date.now() });
+        const frame = await screencap(adb);
+        const png = thumbnailFromFrame(frame);
+        this.cache.set(serial, { png, at: Date.now() });
+        // The background loop is what keeps a replay running while no script
+        // is: this is the same picture, kept at a size worth looking at.
+        this.onFrame?.(serial, frame);
         return png;
       })()
         .catch(() => null)

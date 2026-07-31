@@ -15,19 +15,12 @@ import type {
   ScriptTemplate,
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
-import { randomUUID } from "node:crypto";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { parseNumber, textMatches } from "./ocr.js";
 import { findTemplate, recognize } from "./vision-offload.js";
 import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
 import type { Frame } from "./vision.js";
 
-/** Where a run's frames go, if anything is recording them. */
-export interface RunRecorder {
-  begin(info: { runId: string; serial: string; scriptId: string; scriptName: string; startedAt: number }): void;
-  offer(runId: string, frame: Frame): void;
-  finish(runId: string, outcome: "done" | "stopped" | "error", log: ScriptLogEntry[]): void;
-}
 
 const decoder = new TextDecoder();
 
@@ -70,8 +63,6 @@ async function sh(adb: Adb, command: string): Promise<string> {
 class Stopped extends Error {}
 
 interface Run {
-  /** Identifies this run to anything outside the engine — the replay recorder. */
-  id: string;
   script: Script;
   serial: string;
   startedAt: number;
@@ -105,8 +96,9 @@ export class ScriptEngine {
   /** Offered every frame a step captures, so the thumbnail cache can ride along
    * instead of screencapping the same device again on its own timer. */
   private onFrame: ((serial: string, frame: Frame) => void) | undefined;
-  /** Records those same frames as a replay of the run. */
-  private recorder: RunRecorder | undefined;
+  /** Every log line, for anything that shows what a script was doing beside
+   * something else — the device replay reads them as captions. */
+  private onLogLine: ((serial: string, scriptName: string, message: string) => void) | undefined;
 
   constructor(private readonly adbManager: AdbManager) {}
 
@@ -118,8 +110,8 @@ export class ScriptEngine {
     this.onFrame = handler;
   }
 
-  onRecord(recorder: RunRecorder): void {
-    this.recorder = recorder;
+  onLog(handler: (serial: string, scriptName: string, message: string) => void): void {
+    this.onLogLine = handler;
   }
 
   isRunning(serial: string): boolean {
@@ -160,7 +152,6 @@ export class ScriptEngine {
     const adb = await this.adbManager.getAdb(serial);
     const { width, height } = await this.frameSize(adb);
     const run: Run = {
-      id: randomUUID(),
       script,
       serial,
       startedAt: Date.now(),
@@ -175,25 +166,15 @@ export class ScriptEngine {
     this.runs.set(serial, run);
     this.finished.delete(serial);
     this.log(run, `開始「${script.name}」· 顯示 ${width}×${height}`);
-    this.recorder?.begin({ runId: run.id, serial, scriptId: script.id, scriptName: script.name, startedAt: run.startedAt });
 
     // Fire-and-forget: callers poll status/log.
-    let outcome: "done" | "stopped" | "error" = "done";
     void this.execute(adb, run)
-      .then(() => {
-        outcome = run.stopping ? "stopped" : "done";
-        this.log(run, run.stopping ? "已停止" : "執行完成");
-      })
+      .then(() => this.log(run, run.stopping ? "已停止" : "執行完成"))
       .catch((error: unknown) => {
-        outcome = error instanceof Stopped ? "stopped" : "error";
         if (error instanceof Stopped) this.log(run, "已停止");
         else this.log(run, `錯誤:${error instanceof Error ? error.message : String(error)}`);
       })
       .finally(() => {
-        // The log is handed over at the end rather than streamed: the player
-        // reads live lines from the run status while a run is in progress, and
-        // needs them baked in only once that status is gone.
-        this.recorder?.finish(run.id, outcome, run.log);
         // Free the device, but retain the run so its outcome + log stay
         // readable until the next run replaces it.
         this.runs.delete(serial);
@@ -272,7 +253,6 @@ export class ScriptEngine {
   private async grab(run: Run, adb: Adb): Promise<Frame> {
     const frame = await capture(adb);
     this.onFrame?.(run.serial, frame);
-    this.recorder?.offer(run.id, frame);
     return frame;
   }
 
@@ -533,6 +513,7 @@ export class ScriptEngine {
 
   private log(run: Run, message: string): void {
     run.log.push({ at: Date.now(), message });
+    this.onLogLine?.(run.serial, run.script.name, message);
     if (run.log.length > MAX_LOG) run.log.shift();
   }
 }
