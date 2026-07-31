@@ -4,18 +4,21 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
+import { saveConfig } from "../config.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
 import type { Scheduler } from "../scripts/scheduler.js";
 import type { DraftStore } from "../scripts/draft-store.js";
+import type { ReplayStore } from "../scripts/replay-store.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import { ocrModel } from "../scripts/ocr.js";
 import { findTemplate, recognize } from "../scripts/vision-offload.js";
 import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
+import { readFile } from "node:fs/promises";
 import { BUILT_AT, VERSION } from "../version.js";
 
 const LoginBody = z.object({ password: z.string() });
@@ -211,6 +214,7 @@ export function registerRoutes(
   displayManager: DisplayManager,
   scriptStore: ScriptStore,
   draftStore: DraftStore,
+  replayStore: ReplayStore,
   scriptEngine: ScriptEngine,
   scheduler: Scheduler,
 ): void {
@@ -380,6 +384,59 @@ export function registerRoutes(
     // edits to something that no longer exists.
     draftStore.delete(request.params.id);
     return scriptStore.delete(request.params.id) ? { ok: true } : reply.code(404).send({ error: "not_found" });
+  });
+
+  // ---- replays ----
+  //
+  // A run's timelapse: the frames it captured anyway, downscaled. Read-only
+  // apart from the recording settings, which is what the panel's usage line
+  // needs to be able to change.
+
+  app.get<{ Querystring: { scriptId?: string } }>("/api/replays", async (request) => ({
+    runs: replayStore.list(request.query.scriptId),
+    usedBytes: replayStore.usage(),
+    settings: replayStore.current(),
+  }));
+
+  app.get<{ Params: { runId: string } }>("/api/replays/:runId", async (request, reply) => {
+    const run = replayStore.get(request.params.runId);
+    return run ?? reply.code(404).send({ error: "not_found" });
+  });
+
+  /** One frame. Immutable once written, so it can be cached hard — a player
+   * scrubbing back and forth must not re-fetch what it already has. */
+  app.get<{ Params: { runId: string; n: string } }>("/api/replays/:runId/frames/:n", async (request, reply) => {
+    const path = replayStore.framePath(request.params.runId, Number(request.params.n));
+    if (!path) return reply.code(404).send({ error: "not_found" });
+    try {
+      return reply
+        .header("Content-Type", "image/png")
+        .header("Cache-Control", "private, max-age=31536000, immutable")
+        .send(await readFile(path));
+    } catch {
+      return reply.code(404).send({ error: "not_found" });
+    }
+  });
+
+  const ReplaySettingsBody = z.object({
+    enabled: z.boolean(),
+    intervalSec: z.coerce.number().min(0.2).max(60),
+    maxMb: z.coerce.number().int().min(10).max(20_000),
+  });
+
+  app.put("/api/replays/settings", async (request, reply) => {
+    const body = ReplaySettingsBody.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "bad_request" });
+    const settings = { ...replayStore.current(), ...body.data };
+    replayStore.configure(settings);
+    // Persisted next to the password so the choice survives a restart; merged
+    // rather than rewritten, since that file is not ours alone.
+    saveConfig({
+      replayEnabled: settings.enabled,
+      replayInterval: settings.intervalSec,
+      replayMaxMb: settings.maxMb,
+    });
+    return { ...settings, usedBytes: replayStore.usage() };
   });
 
   // ---- drafts ----

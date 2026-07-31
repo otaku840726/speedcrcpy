@@ -13,6 +13,7 @@ import {
   removeAt,
   replaceAt,
 } from "./step-tree";
+import { ReplayPlayer } from "./ReplayPlayer";
 import { asDraft, type Draft, draftBody, isSaved, newDraft, stableJson } from "./script-draft";
 import { TestPreview, type TestTarget } from "./TestPreview";
 
@@ -1129,6 +1130,8 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
 
         </>
       )}
+
+      {draft?.id && <ReplayPlayer scriptId={draft.id} live={running || starting} />}
 
       {status && status.log.length > 0 && (
         <div className="sp-log">

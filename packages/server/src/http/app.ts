@@ -13,6 +13,7 @@ import type { SessionManager } from "../scrcpy/session-manager.js";
 import type { ScriptEngine } from "../scripts/engine.js";
 import type { Scheduler } from "../scripts/scheduler.js";
 import type { DraftStore } from "../scripts/draft-store.js";
+import type { ReplayStore } from "../scripts/replay-store.js";
 import type { ScriptStore } from "../scripts/store.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { registerRoutes } from "./routes.js";
@@ -35,6 +36,7 @@ export async function buildApp(
   displayManager: DisplayManager,
   scriptStore: ScriptStore,
   draftStore: DraftStore,
+  replayStore: ReplayStore,
   scriptEngine: ScriptEngine,
   scheduler: Scheduler,
 ): Promise<FastifyInstance> {
@@ -70,7 +72,7 @@ export async function buildApp(
     }
   });
 
-  registerRoutes(app, auth, adbManager, thumbnails, stats, sessionManager, displayManager, scriptStore, draftStore, scriptEngine, scheduler);
+  registerRoutes(app, auth, adbManager, thumbnails, stats, sessionManager, displayManager, scriptStore, draftStore, replayStore, scriptEngine, scheduler);
 
   // In production the built web app is served by the server itself;
   // in development Vite serves it and proxies /api + /ws here.

@@ -13,6 +13,7 @@ import { ThumbnailManager } from "./scrcpy/thumbnail-manager.js";
 import { ScriptEngine } from "./scripts/engine.js";
 import { Scheduler } from "./scripts/scheduler.js";
 import { DraftStore } from "./scripts/draft-store.js";
+import { ReplayStore } from "./scripts/replay-store.js";
 import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
 
@@ -39,10 +40,18 @@ const statsManager = new DeviceStatsManager(adbManager, config.statsInterval * 1
 const displayManager = new DisplayManager(adbManager, config.dataDir);
 const scriptStore = new ScriptStore(config.dataDir);
 const draftStore = new DraftStore(config.dataDir);
+const replayStore = new ReplayStore(config.dataDir, {
+  enabled: config.replayEnabled,
+  intervalSec: config.replayInterval,
+  maxMb: config.replayMaxMb,
+  width: config.replayWidth,
+});
 const scriptEngine = new ScriptEngine(adbManager);
 // A script screencaps constantly; let the thumbnail cache ride along on those
 // frames rather than capturing the same device again on its own timer.
 scriptEngine.onCapture((serial, frame) => thumbnailManager.offer(serial, frame));
+// Those same frames are the replay: a run's own screenshots, kept as a timelapse.
+scriptEngine.onRecord(replayStore);
 const scheduler = new Scheduler(scriptStore, scriptEngine);
 const sessionManager = new SessionManager(
   adbManager,
@@ -52,7 +61,7 @@ const sessionManager = new SessionManager(
   (serial, active) => screenManager.setSessionActive(serial, active),
   displayManager,
 );
-const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, draftStore, scriptEngine, scheduler);
+const app = await buildApp(config, auth, adbManager, thumbnailManager, statsManager, sessionManager, displayManager, scriptStore, draftStore, replayStore, scriptEngine, scheduler);
 
 const gateway = new WsGateway(app, auth);
 registerEventsEndpoint(gateway, adbManager);

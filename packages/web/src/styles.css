@@ -1729,3 +1729,109 @@ button.tp-swatch:not(:disabled):hover {
   border-radius: 50%;
   background: #f0a94b;
 }
+
+/* Run replay: the screenshots a run took, played back as a timelapse. */
+.sp-replay {
+  border-top: 1px solid var(--border, #2f353d);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sp-replay-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sp-replay-head select {
+  font-size: 11px;
+  padding: 3px 22px 3px 7px;
+  min-width: 0;
+  flex: 1;
+}
+.sp-replay-cog {
+  padding: 3px 6px;
+}
+.sp-replay-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+  padding: 8px;
+}
+.sp-replay-settings div,
+.sp-replay-settings label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-replay-settings select {
+  font-size: 11px;
+  padding: 3px 22px 3px 7px;
+}
+/* The frame itself, on black. Sized from its height so the box hugs a portrait
+   screenshot instead of leaving the panel's full width in black beside it; the
+   aspect ratio comes from the recording. */
+.sp-replay-stage {
+  height: 260px;
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #000;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sp-replay-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+/* Fetched but never shown — it is the next frame, warming the browser cache. */
+.sp-replay-preload {
+  display: none;
+}
+.sp-replay-scrub {
+  width: 100%;
+  margin: 0;
+}
+.sp-replay-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.sp-replay-controls button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.sp-replay-controls button.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sp-replay-caption {
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border, #2f353d);
+  padding-top: 6px;
+}
+.sp-replay-empty {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+  margin: 0;
+  padding: 14px 8px;
+  line-height: 1.6;
+}
+.sp-replay-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #f0a94b;
+}

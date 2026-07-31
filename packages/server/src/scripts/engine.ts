@@ -15,11 +15,19 @@ import type {
   ScriptTemplate,
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
+import { randomUUID } from "node:crypto";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { parseNumber, textMatches } from "./ocr.js";
 import { findTemplate, recognize } from "./vision-offload.js";
 import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
 import type { Frame } from "./vision.js";
+
+/** Where a run's frames go, if anything is recording them. */
+export interface RunRecorder {
+  begin(info: { runId: string; serial: string; scriptId: string; scriptName: string; startedAt: number }): void;
+  offer(runId: string, frame: Frame): void;
+  finish(runId: string, outcome: "done" | "stopped" | "error", log: ScriptLogEntry[]): void;
+}
 
 const decoder = new TextDecoder();
 
@@ -62,6 +70,8 @@ async function sh(adb: Adb, command: string): Promise<string> {
 class Stopped extends Error {}
 
 interface Run {
+  /** Identifies this run to anything outside the engine — the replay recorder. */
+  id: string;
   script: Script;
   serial: string;
   startedAt: number;
@@ -95,6 +105,8 @@ export class ScriptEngine {
   /** Offered every frame a step captures, so the thumbnail cache can ride along
    * instead of screencapping the same device again on its own timer. */
   private onFrame: ((serial: string, frame: Frame) => void) | undefined;
+  /** Records those same frames as a replay of the run. */
+  private recorder: RunRecorder | undefined;
 
   constructor(private readonly adbManager: AdbManager) {}
 
@@ -104,6 +116,10 @@ export class ScriptEngine {
 
   onCapture(handler: (serial: string, frame: Frame) => void): void {
     this.onFrame = handler;
+  }
+
+  onRecord(recorder: RunRecorder): void {
+    this.recorder = recorder;
   }
 
   isRunning(serial: string): boolean {
@@ -144,6 +160,7 @@ export class ScriptEngine {
     const adb = await this.adbManager.getAdb(serial);
     const { width, height } = await this.frameSize(adb);
     const run: Run = {
+      id: randomUUID(),
       script,
       serial,
       startedAt: Date.now(),
@@ -158,15 +175,25 @@ export class ScriptEngine {
     this.runs.set(serial, run);
     this.finished.delete(serial);
     this.log(run, `開始「${script.name}」· 顯示 ${width}×${height}`);
+    this.recorder?.begin({ runId: run.id, serial, scriptId: script.id, scriptName: script.name, startedAt: run.startedAt });
 
     // Fire-and-forget: callers poll status/log.
+    let outcome: "done" | "stopped" | "error" = "done";
     void this.execute(adb, run)
-      .then(() => this.log(run, run.stopping ? "已停止" : "執行完成"))
+      .then(() => {
+        outcome = run.stopping ? "stopped" : "done";
+        this.log(run, run.stopping ? "已停止" : "執行完成");
+      })
       .catch((error: unknown) => {
+        outcome = error instanceof Stopped ? "stopped" : "error";
         if (error instanceof Stopped) this.log(run, "已停止");
         else this.log(run, `錯誤:${error instanceof Error ? error.message : String(error)}`);
       })
       .finally(() => {
+        // The log is handed over at the end rather than streamed: the player
+        // reads live lines from the run status while a run is in progress, and
+        // needs them baked in only once that status is gone.
+        this.recorder?.finish(run.id, outcome, run.log);
         // Free the device, but retain the run so its outcome + log stay
         // readable until the next run replaces it.
         this.runs.delete(serial);
@@ -241,11 +268,17 @@ export class ScriptEngine {
    * likely thing to be caught by one. Logged once per run — a device that is
    * really gone would otherwise fill the log with the same line.
    */
+  /** Capture, and let everything that wants a copy of the picture have one. */
+  private async grab(run: Run, adb: Adb): Promise<Frame> {
+    const frame = await capture(adb);
+    this.onFrame?.(run.serial, frame);
+    this.recorder?.offer(run.id, frame);
+    return frame;
+  }
+
   private async pollFrame(run: Run, adb: Adb): Promise<Frame | undefined> {
     try {
-      const frame = await capture(adb);
-      this.onFrame?.(run.serial, frame);
-      return frame;
+      return await this.grab(run, adb);
     } catch (error) {
       if (!run.captureWarned) {
         run.captureWarned = true;
@@ -337,7 +370,7 @@ export class ScriptEngine {
         }
       }
       case "ifColor": {
-        const frame = await capture(adb);
+        const frame = await this.grab(run, adb);
         this.syncSize(run, frame);
         const got = colorAt(frame, step.x, step.y);
         const hit = colorMatches(got, parseHex(step.color), step.tolerance);
@@ -380,7 +413,7 @@ export class ScriptEngine {
         }
       }
       case "ifImage": {
-        const frame = await capture(adb);
+        const frame = await this.grab(run, adb);
         this.syncSize(run, frame);
         this.warnTemplateScale(run, step.template, frame.width, frame.height);
         const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
@@ -419,14 +452,14 @@ export class ScriptEngine {
         }
       }
       case "ifText": {
-        const result = await recognize(await capture(adb), step.region);
+        const result = await recognize(await this.grab(run, adb), step.region);
         const hit = textMatches(result.text, step.text);
         this.log(run, `若文字含「${step.text}」:${hit ? "是" : `否(讀到:${result.text.slice(0, 30) || "空"})`}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
       }
       case "ifNumber": {
-        const result = await recognize(await capture(adb), step.region);
+        const result = await recognize(await this.grab(run, adb), step.region);
         const value = parseNumber(result.text);
         const hit =
           value !== null &&

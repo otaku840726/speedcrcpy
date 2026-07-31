@@ -62,6 +62,21 @@ const ConfigSchema = z.object({
     .transform((v) => v === true || v === "true" || v === "1" || v === "yes"),
   /** UDP port for the WebTransport gateway (separate from the HTTP `port`). */
   wtPort: z.coerce.number().int().min(1).max(65535).default(8443),
+  /**
+   * Keep a timelapse of what each script run saw, from the frames the run
+   * already captured (no extra screencap). Off means neither disk nor CPU is
+   * touched for it.
+   */
+  replayEnabled: z
+    .union([z.boolean(), z.string()])
+    .default(true)
+    .transform((v) => v !== false && v !== "false" && v !== "0" && v !== "no"),
+  /** Floor between recorded frames, in seconds. */
+  replayInterval: z.coerce.number().min(0.2).max(60).default(2),
+  /** Ceiling on all recordings; the oldest run is evicted when it is reached. */
+  replayMaxMb: z.coerce.number().int().min(10).max(20_000).default(200),
+  /** Stored frame width in pixels — enough to read a button, not a whole UI. */
+  replayWidth: z.coerce.number().int().min(120).max(1080).default(360),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
@@ -71,6 +86,27 @@ export type Config = z.infer<typeof ConfigSchema> & { dataDir: string };
  * If no password is configured anywhere, one is generated once and persisted
  * to data/config.json (printed to the log so the user can find it).
  */
+/**
+ * Merge a few fields into data/config.json, leaving everything else — the
+ * generated password above, in particular — untouched. For settings the UI is
+ * allowed to change. An environment variable for the same field still wins at
+ * the next boot, since env is applied last.
+ */
+export function saveConfig(patch: Record<string, unknown>): void {
+  const dataDir = resolve(process.env.SPEEDCRCPY_DATA_DIR ?? "data");
+  const configPath = join(dataDir, "config.json");
+  let current: Record<string, unknown> = {};
+  if (existsSync(configPath)) {
+    try {
+      current = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      /* corrupt file — replaced rather than merged into */
+    }
+  }
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(configPath, JSON.stringify({ ...current, ...patch }, null, 2));
+}
+
 export function loadConfig(): Config {
   const dataDir = resolve(process.env.SPEEDCRCPY_DATA_DIR ?? "data");
   mkdirSync(dataDir, { recursive: true });
@@ -101,6 +137,9 @@ export function loadConfig(): Config {
     ...(process.env.SPEEDCRCPY_VIDEO_CODEC ? { videoCodec: process.env.SPEEDCRCPY_VIDEO_CODEC } : {}),
     ...(process.env.SPEEDCRCPY_WT_ENABLED ? { wtEnabled: process.env.SPEEDCRCPY_WT_ENABLED } : {}),
     ...(process.env.SPEEDCRCPY_WT_PORT ? { wtPort: process.env.SPEEDCRCPY_WT_PORT } : {}),
+    ...(process.env.SPEEDCRCPY_REPLAY ? { replayEnabled: process.env.SPEEDCRCPY_REPLAY } : {}),
+    ...(process.env.SPEEDCRCPY_REPLAY_INTERVAL ? { replayInterval: process.env.SPEEDCRCPY_REPLAY_INTERVAL } : {}),
+    ...(process.env.SPEEDCRCPY_REPLAY_MAX_MB ? { replayMaxMb: process.env.SPEEDCRCPY_REPLAY_MAX_MB } : {}),
   };
 
   if (typeof merged.password !== "string" || merged.password.length === 0) {
