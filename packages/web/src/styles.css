@@ -1772,29 +1772,19 @@ button.tp-swatch:not(:disabled):hover {
   font-size: 11px;
   padding: 3px 22px 3px 7px;
 }
-/* The frame itself, on black. Sized from its height so the box hugs a portrait
-   screenshot instead of leaving the panel's full width in black beside it; the
-   aspect ratio comes from the recording. */
+/* The picture is the box: constraining the image itself rather than a frame
+   around it means neither a portrait screenshot nor a landscape one is padded
+   out with black to fill a shape it doesn't have. */
 .sp-replay-stage {
-  height: 260px;
-  width: auto;
-  max-width: 100%;
-  margin: 0 auto;
-  background: #000;
-  border-radius: 8px;
-  overflow: hidden;
   display: flex;
-  align-items: center;
   justify-content: center;
 }
 .sp-replay-stage img {
   max-width: 100%;
-  max-height: 100%;
+  max-height: 260px;
+  border-radius: 8px;
+  background: #000;
   display: block;
-}
-/* Fetched but never shown — it is the next frame, warming the browser cache. */
-.sp-replay-preload {
-  display: none;
 }
 .sp-replay-scrub {
   width: 100%;

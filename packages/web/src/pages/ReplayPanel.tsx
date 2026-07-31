@@ -103,6 +103,16 @@ export function ReplayPanel({ serial, onClose }: { serial: string; onClose: () =
     if (follow && shots.length) setAt(shots.length - 1);
   }, [follow, shots.length]);
 
+  // Warm the next frame in the browser cache so playback does not flash white
+  // between frames on a slow link. Deliberately not a hidden <img> in the
+  // stage: it takes part in layout however it is hidden, and the frame ends up
+  // drawn beside the one being watched.
+  useEffect(() => {
+    const next = shots[at + 1];
+    if (!next) return;
+    new Image().src = `/api/devices/${encodeURIComponent(serial)}/replay/${next.at}`;
+  }, [shots, at, serial]);
+
   useEffect(() => {
     clearTimeout(timer.current);
     if (!playing || !shots.length) return;
@@ -221,13 +231,6 @@ export function ReplayPanel({ serial, onClose }: { serial: string; onClose: () =
         <>
           <div className="sp-replay-stage">
             <img src={`/api/devices/${encodeURIComponent(serial)}/replay/${current?.at}`} alt="" />
-            {at + 1 < shots.length && (
-              <img
-                className="sp-replay-preload"
-                src={`/api/devices/${encodeURIComponent(serial)}/replay/${shots[at + 1]!.at}`}
-                alt=""
-              />
-            )}
           </div>
 
           <div className="sp-replay-track">
