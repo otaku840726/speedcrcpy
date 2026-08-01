@@ -1,8 +1,9 @@
 import { scriptMigrateDevices, scriptMigrateSteps } from "@speedcrcpy/shared";
 import type { Script } from "@speedcrcpy/shared";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { VERSION } from "../version.js";
 
 /** Persisted automation scripts, keyed by id (see docs/automation-scripts.md). */
 export class ScriptStore {
@@ -11,6 +12,19 @@ export class ScriptStore {
 
   constructor(dataDir: string) {
     this.path = join(dataDir, "scripts.json");
+    // One copy per version, taken before this build has written anything.
+    // Upgrades add fields and step types that an older build cannot read, so
+    // the cost of going back is a file it can still parse — and that file only
+    // exists if it was taken before the first save.
+    const backup = join(dataDir, `scripts.backup-${VERSION}.json`);
+    if (existsSync(this.path) && !existsSync(backup)) {
+      try {
+        copyFileSync(this.path, backup);
+        console.log(`[scripts] 已備份目前的腳本到 ${backup}`);
+      } catch {
+        /* a missing backup must never stop the server starting */
+      }
+    }
     if (existsSync(this.path)) {
       try {
         const list = JSON.parse(readFileSync(this.path, "utf8")) as Script[];

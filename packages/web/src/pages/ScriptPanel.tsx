@@ -1,4 +1,4 @@
-import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, SCRIPT_STEP_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger } from "@speedcrcpy/shared";
+import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, SCRIPT_STEP_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger, type ScriptVariable } from "@speedcrcpy/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
@@ -13,7 +13,9 @@ import {
   removeAt,
   replaceAt,
 } from "./step-tree";
+import { CallStepBody, IfVarBody } from "./script-call";
 import { asDraft, type Draft, draftBody, isSaved, newDraft, stableJson } from "./script-draft";
+import { VariablesPanel } from "./script-vars";
 import { TestPreview, type TestTarget } from "./TestPreview";
 
 const MODE_LABELS: Record<string, string> = { standalone: "前後無字", exact: "整行相符" };
@@ -66,6 +68,8 @@ const KEY_LABELS: Record<string, string> = {
 /** The palette, in the order it reads on screen. Names come from the shared map
  * so the run log calls a step what the editor calls it. */
 const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
+  { key: true, make: () => ({ type: "call", scriptId: "", args: [], outputs: [] }) },
+  { key: true, make: () => ({ type: "ifVar", name: "", compare: "==", then: [], else: [] }) },
   { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
   { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
@@ -111,6 +115,16 @@ const openDraft = (): Draft | undefined => (openDraftKey ? localDrafts.get(openD
  * project exists to be careful with — waiting for a pause and skipping an
  * unchanged body keeps it to roughly one upload per burst of editing. */
 const DRAFT_SYNC_MS = 2000;
+
+/**
+ * Which blocks are folded shut, keyed by script and path.
+ *
+ * Deliberately not part of the script: how you happen to be looking at a tree
+ * is not something to save, send to the server, or count as an unsaved change.
+ * Module-level so it survives closing the panel, like the clipboard.
+ */
+const collapsed = new Map<string, Set<string>>();
+const foldKey = (path: Path) => path.map((p) => `${p.index}${p.branch ?? ""}`).join("/");
 
 // ---- picker ----
 
@@ -331,6 +345,14 @@ function StepRow({
   clip,
   pick,
   probe,
+  modules,
+  variables,
+  onRunHere,
+  onEditModule,
+  editingModule,
+  renderModule,
+  scriptKey,
+  onFold,
 }: {
   step: ScriptStep;
   path: Path;
@@ -347,6 +369,19 @@ function StepRow({
   clip: ScriptStep | undefined;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
   probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
+  /** Scripts flagged as modules — what a call step can point at. */
+  modules: Script[];
+  /** The enclosing script's declared variables. */
+  variables: ScriptVariable[];
+  /** Run only this step, for checking one block without the rest. */
+  onRunHere: (path: Path) => void;
+  onEditModule: (scriptId: string) => void;
+  editingModule: string | undefined;
+  /** The called module's own editor, rendered inside this row. */
+  renderModule: (scriptId: string) => React.ReactNode;
+  /** Identifies the script these paths belong to, for the fold state. */
+  scriptKey: string;
+  onFold: () => void;
 }) {
   const set = (patch: Partial<ScriptStep>) => onChange(path, { ...step, ...patch } as ScriptStep);
   const num = (v: string) => Number(v) || 0;
@@ -430,6 +465,24 @@ function StepRow({
           )}
         </>
       );
+      break;
+    case "call":
+      body = (
+        <CallStepBody
+          compact={collapsed.get(scriptKey)?.has(foldKey(path))}
+          step={step}
+          modules={modules}
+          onChange={(patch) => set(patch as Partial<ScriptStep>)}
+          onEdit={() => onEditModule(step.scriptId)}
+          editing={editingModule === step.scriptId}
+          pickTemplate={(apply) => pick("template", (r) => r.template && apply(r.template))}
+          pickRegion={(apply) => pick("region", (r) => r.region && apply(r.region))}
+          callerVars={variables}
+        />
+      );
+      break;
+    case "ifVar":
+      body = <IfVarBody step={step} variables={variables} onChange={(patch) => set(patch as Partial<ScriptStep>)} />;
       break;
     case "findTap":
     case "ifImage":
@@ -547,13 +600,35 @@ function StepRow({
   const branches: ("body" | "then" | "else")[] =
     step.type === "loop"
       ? ["body"]
-      : step.type === "ifColor" || step.type === "ifImage" || step.type === "ifText" || step.type === "ifNumber"
+      : step.type === "ifColor" || step.type === "ifImage" || step.type === "ifText" || step.type === "ifNumber" || step.type === "ifVar"
         ? ["then", "else"]
         : [];
+
+  // A call is foldable too: expanding it is what opens the module's editor.
+  const foldable = branches.length > 0 || step.type === "call";
+  const folds = collapsed.get(scriptKey) ?? new Set<string>();
+  const shut = folds.has(foldKey(path));
+  const toggleFold = () => {
+    const next = collapsed.get(scriptKey) ?? new Set<string>();
+    shut ? next.delete(foldKey(path)) : next.add(foldKey(path));
+    collapsed.set(scriptKey, next);
+    onFold();
+  };
+  /** What a folded block says about itself — enough to not need opening. */
+  const summary = branches
+    .map((b) => `${b === "body" ? "" : b === "then" ? "成立 " : "否則 "}${childrenOf(step, b).length}`)
+    .join(" / ");
 
   return (
     <div className={`sp-step${branches.length ? " sp-block" : ""}${step.disabled ? " off" : ""}`}>
       <div className="sp-line">
+        {foldable ? (
+          <button className="sp-fold" onClick={toggleFold} title={shut ? "展開" : "折疊"}>
+            <Icon name={shut ? "next" : "arrowDown"} size={11} />
+          </button>
+        ) : (
+          <span className="sp-fold-gap" />
+        )}
         {/* Off but kept. Written as `undefined` rather than `false` so a step
             that was never switched off stays exactly as it was on disk. */}
         <input
@@ -567,8 +642,12 @@ function StepRow({
               : `關閉這個步驟:保留設定但執行時略過${branches.length ? "(含裡面的步驟)" : ""}`
           }
         />
-        <span className="sp-body">{body}</span>
+        <span className="sp-body">
+          {body}
+          {shut && summary && <span className="sp-summary">內含 {summary} 步</span>}
+        </span>
         <span className="sp-actions">
+          <button onClick={() => onRunHere(path)} title="只執行這一段"><Icon name="play" size={12} /></button>
           <button onClick={() => onMove(path, -1)} title="上移"><Icon name="arrowUp" size={12} /></button>
           <button onClick={() => onMove(path, 1)} title="下移"><Icon name="arrowDown" size={12} /></button>
           <button onClick={() => onCopy(step)} title="複製(含底下的子步驟)"><Icon name="copy" size={12} /></button>
@@ -581,7 +660,9 @@ function StepRow({
           <button onClick={() => onRemove(path)} title="刪除"><Icon name="trash" size={12} /></button>
         </span>
       </div>
-      {branches.map((branch) => (
+      {step.type === "call" && !shut && editingModule === step.scriptId && renderModule(step.scriptId)}
+      {!shut &&
+        branches.map((branch) => (
         <div key={branch} className={`sp-branch sp-branch-${branch}`}>
           {branches.length > 1 && <div className="sp-branch-label">{branch === "then" ? "成立" : "否則"}</div>}
           {childrenOf(step, branch).map((child, i) => (
@@ -599,11 +680,19 @@ function StepRow({
               clip={clip}
               pick={pick}
               probe={probe}
+              modules={modules}
+              variables={variables}
+              onRunHere={onRunHere}
+              onEditModule={onEditModule}
+              editingModule={editingModule}
+              renderModule={renderModule}
+              scriptKey={scriptKey}
+              onFold={onFold}
             />
           ))}
           <AddMenu onAdd={(s) => onAdd(path, branch, s)} clip={clip} />
         </div>
-      ))}
+        ))}
     </div>
   );
 }
@@ -648,6 +737,141 @@ function AddMenu({ onAdd, clip }: { onAdd: (step: ScriptStep) => void; clip: Scr
   );
 }
 
+/**
+ * A called module, edited where it is called.
+ *
+ * Switching scripts to change three steps of a module is the workflow this
+ * removes. It has its own draft and its own save button because it *is* another
+ * script: saving the caller must not save the module, and vice versa. The
+ * warning about other callers is not decoration — editing here changes what
+ * they do too.
+ */
+function ModuleEditor({
+  scriptId,
+  scripts,
+  onSaved,
+  pick,
+  probe,
+  clip,
+  onCopy,
+  onRunHere,
+}: {
+  scriptId: string;
+  scripts: Script[];
+  onSaved: () => void;
+  pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
+  probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
+  clip: ScriptStep | undefined;
+  onCopy: (step: ScriptStep) => void;
+  onRunHere: (path: Path) => void;
+}) {
+  const stored = scripts.find((s) => s.id === scriptId);
+  const [draft, setDraft] = useState<Draft | undefined>(() => localDrafts.get(scriptId) ?? (stored ? asDraft(stored) : undefined));
+  const [usedBy, setUsedBy] = useState<{ id: string; name: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [fold, setFold] = useState(0);
+
+  useEffect(() => {
+    void api<{ usedBy: { id: string; name: string }[] }>(`/api/scripts/${scriptId}/usage`)
+      .then((r) => setUsedBy(r.usedBy))
+      .catch(() => {});
+  }, [scriptId]);
+
+  if (!draft || !stored) return <p className="sp-replay-empty">找不到這個模組</p>;
+  const dirty = !isSaved(draft, stored);
+  const edit = (update: (d: Draft) => Draft) =>
+    setDraft((d) => {
+      if (!d) return d;
+      const next = update(d);
+      localDrafts.set(next.key, next);
+      return next;
+    });
+  const editSteps = (fn: (steps: ScriptStep[]) => ScriptStep[]) => edit((d) => ({ ...d, steps: fn(d.steps) }));
+
+  return (
+    <div className="sp-module-edit">
+      <div className="sp-module-head">
+        <Icon name="package" size={13} />
+        <span>{draft.name}</span>
+        {dirty && <span className="sp-unsaved">未儲存</span>}
+        <span style={{ flex: 1 }} />
+        <button
+          className={dirty ? "primary" : ""}
+          disabled={!dirty || busy}
+          onClick={() => {
+            setBusy(true);
+            setError(undefined);
+            void api<Script>("/api/scripts", { method: "POST", body: JSON.stringify(draftBody(draft)) })
+              .then((saved) => {
+                localDrafts.delete(draft.key);
+                void api(`/api/drafts/${encodeURIComponent(draft.key)}`, { method: "DELETE" }).catch(() => {});
+                setDraft(asDraft(saved));
+                onSaved();
+              })
+              .catch((e: unknown) => setError(e instanceof Error ? e.message : "儲存失敗"))
+              .finally(() => setBusy(false));
+          }}
+        >
+          儲存模組
+        </button>
+        {dirty && (
+          <button
+            onClick={() => {
+              localDrafts.delete(draft.key);
+              setDraft(asDraft(stored));
+            }}
+          >
+            放棄
+          </button>
+        )}
+      </div>
+      {error && <p className="error-text">{error}</p>}
+      {usedBy.length > 0 && (
+        <p className="sp-warn-inline">
+          <Icon name="copy" size={11} /> {usedBy.length} 支腳本使用這個模組,改動會一起生效:{usedBy.map((u) => u.name).join("、")}
+        </p>
+      )}
+      <VariablesPanel
+        variables={draft.variables ?? []}
+        onChange={(variables) => edit((d) => ({ ...d, variables }))}
+        isModule
+      />
+      <div className="sp-steps" data-fold={fold}>
+        {draft.steps.map((step, i) => (
+          <StepRow
+            key={i}
+            step={step}
+            path={[{ index: i }]}
+            onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
+            onRemove={(p) => editSteps((s) => editList(s, p, removeAt()))}
+            onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
+            onAdd={(p, branch, next) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(next)))}
+            onCopy={onCopy}
+            onCut={(p, cutStep) => {
+              onCopy(cutStep);
+              editSteps((s) => editList(s, p, removeAt()));
+            }}
+            onPaste={(p) => clip && editSteps((s) => editList(s, p, insertAfter(structuredClone(clip))))}
+            clip={clip}
+            pick={pick}
+            probe={probe}
+            modules={scripts.filter((s) => s.isModule && s.id !== scriptId)}
+            variables={draft.variables ?? []}
+            onRunHere={onRunHere}
+            onEditModule={() => setError("模組裡的模組請從腳本清單開啟編輯")}
+            editingModule={undefined}
+            renderModule={() => null}
+            scriptKey={scriptId}
+            onFold={() => setFold((n) => n + 1)}
+          />
+        ))}
+        <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} clip={clip} />
+      </div>
+    </div>
+  );
+}
+
 // ---- panel ----
 
 export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () => void }) {
@@ -658,6 +882,10 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [draftKeys, setDraftKeys] = useState<{ key: string; updatedAt: number }[]>([]);
   /** Shows 已儲存 for a moment after a save; cleared by the next edit. */
   const [justSaved, setJustSaved] = useState(false);
+  /** Which called module is open for editing, and a counter that re-renders
+   * when a block is folded (the fold state itself lives outside React). */
+  const [editingModule, setEditingModule] = useState<string>();
+  const [fold, setFold] = useState(0);
   /** Edits the debounce is still sitting on, so closing the panel can flush them. */
   const unsent = useRef<{ key: string; draft: Draft } | undefined>(undefined);
   /** Known devices, so a scheduled script can be pointed at several. */
@@ -829,6 +1057,17 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
     editSteps(fn);
   };
 
+  /** Run a single block on the device being viewed. Straight to the engine —
+   * a debugging run should not queue behind or preempt scheduled work. */
+  const runHere = (path: Path) => {
+    if (!draft?.id) return setError("先儲存腳本才能執行其中一段");
+    setError(undefined);
+    void api(`/api/devices/${encodeURIComponent(serial)}/scripts/${draft.id}/run`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }).catch((e: unknown) => setError(e instanceof Error ? e.message : "執行失敗"));
+  };
+
   const copyStep = (step: ScriptStep) => {
     clipboard = structuredClone(step);
     setClip(clipboard);
@@ -978,11 +1217,20 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
           }}
         >
           <option value="">— 選擇腳本 —</option>
-          {scripts.map((s) => (
-            <option key={s.id} value={s.id}>
-              {draftKeys.some((k) => k.key === s.id) ? `● ${s.name}` : s.name}
-            </option>
-          ))}
+          {[
+            { label: "腳本", items: scripts.filter((s) => !s.isModule) },
+            { label: "模組", items: scripts.filter((s) => s.isModule) },
+          ]
+            .filter((group) => group.items.length)
+            .map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.items.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {draftKeys.some((k) => k.key === s.id) ? `● ${s.name}` : s.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
         </select>
         <button onClick={() => show(newDraft(serial))}>新建</button>
         {draft && (
@@ -1033,7 +1281,22 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
             </button>
           </div>
 
+          <VariablesPanel
+            variables={draft.variables ?? []}
+            onChange={(variables) => applyDraft((d) => ({ ...d, variables }))}
+            isModule={!!draft.isModule}
+          />
+
           <div className="sp-sched">
+            <label className="sp-enable" title="模組由其他腳本呼叫,不進排程">
+              <input
+                type="checkbox"
+                checked={!!draft.isModule}
+                onChange={(e) => applyDraft((d) => ({ ...d, isModule: e.target.checked || undefined }))}
+              />
+              模組
+            </label>
+            {!draft.isModule && (
             <select
               value={draft.trigger.type}
               onChange={(e) => {
@@ -1045,6 +1308,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
               <option value="persistent">常駐</option>
               <option value="daily">每日</option>
             </select>
+            )}
             {draft.trigger.type === "daily" && (
               <input
                 type="time"
@@ -1108,6 +1372,27 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 }}
                 onPaste={(p) => clip && restructure((s) => editList(s, p, insertAfter(structuredClone(clip))))}
                 clip={clip}
+                modules={scripts.filter((s) => s.isModule && s.id !== draft.id)}
+                variables={draft.variables ?? []}
+                onRunHere={runHere}
+                onEditModule={(id) => setEditingModule((current) => (current === id ? undefined : id))}
+                editingModule={editingModule}
+                renderModule={(id) => (
+                  <ModuleEditor
+                    scriptId={id}
+                    scripts={scripts}
+                    onSaved={() => void reload()}
+                    pick={(mode, apply) => setPicker({ mode, apply })}
+                    probe={(target, path, step) =>
+                      setTest({ target, path, selectable: step.type === "tapText" || step.type === "findTap" })
+                    }
+                    clip={clip}
+                    onCopy={copyStep}
+                    onRunHere={runHere}
+                  />
+                )}
+                scriptKey={draft.key}
+                onFold={() => setFold((n) => n + 1)}
                 pick={(mode, apply) => setPicker({ mode, apply })}
                 probe={(target, path, step) =>
                   setTest({

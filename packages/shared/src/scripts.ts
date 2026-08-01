@@ -52,6 +52,39 @@ export const MAX_TEMPLATE_BASE64 = 4_000_000;
  */
 export type ScriptStep = ScriptStepKind & { disabled?: boolean };
 
+/**
+ * What a variable holds. The type is chosen when the variable is declared, and
+ * it decides everything downstream: which comparisons `ifVar` offers, which
+ * control the editor shows for an argument, and which variables are listed
+ * where a value is wanted. A wrong pairing is never offered rather than
+ * offered and then rejected.
+ */
+export type ScriptVarType = "number" | "text" | "boolean" | "image" | "region";
+
+/**
+ * A named value inside one script.
+ *
+ * `in` is supplied by whoever calls this script as a module, `out` is handed
+ * back to them, `local` never leaves. A module sees its own variables and
+ * nothing else — the caller's are not visible — so the same module behaves the
+ * same way wherever it is used, which is the only reason calling it is safer
+ * than copying its steps.
+ */
+export interface ScriptVariable {
+  name: string;
+  type: ScriptVarType;
+  kind: "in" | "out" | "local";
+  /** For `in`: used when the caller leaves the argument empty. */
+  default?: string | number | boolean | ScriptTemplate | ScriptRegion;
+}
+
+/** One argument at a call site: a value typed in, or another variable. */
+export interface ScriptArg {
+  param: string;
+  value?: string | number | boolean | ScriptTemplate | ScriptRegion;
+  fromVar?: string;
+}
+
 type ScriptStepKind =
   | { type: "tap"; x: number; y: number }
   | { type: "swipe"; x1: number; y1: number; x2: number; y2: number; durationMs: number }
@@ -72,6 +105,8 @@ type ScriptStepKind =
       tolerance: number;
       then: ScriptStep[];
       else?: ScriptStep[];
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
     }
   /** Poll until the template is found (score >= threshold), then tap its centre. */
   | {
@@ -86,6 +121,8 @@ type ScriptStepKind =
       /** Which candidates count, and which of them to tap. */
       filter?: ScriptFilter;
       pick?: ScriptPick;
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
     }
   /** Branch on whether the template is on screen right now. */
   | {
@@ -95,6 +132,8 @@ type ScriptStepKind =
       region?: ScriptRegion;
       then: ScriptStep[];
       else?: ScriptStep[];
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
     }
   /**
    * Recognise text and tap what matched. Matching is substring-based
@@ -120,9 +159,41 @@ type ScriptStepKind =
        */
       offsetX?: number;
       offsetY?: number;
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
     }
   /** Branch on whether recognised text contains `text`. */
-  | { type: "ifText"; text: string; region?: ScriptRegion; then: ScriptStep[]; else?: ScriptStep[] }
+  | {
+      type: "ifText";
+      text: string;
+      region?: ScriptRegion;
+      then: ScriptStep[];
+      else?: ScriptStep[];
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
+    }
+  /**
+   * Run another script here, as a step.
+   *
+   * The module gets only what `args` supply and gives back only what `outputs`
+   * name, so it cannot be affected by — or affect — anything else in the
+   * caller. Deliberately carries no branches of its own: a module that wants to
+   * report success declares a boolean output, and the caller asks about it with
+   * `ifVar` like any other value. One way to branch, not two.
+   */
+  | { type: "call"; scriptId: string; args: ScriptArg[]; outputs: { param: string; toVar: string }[] }
+  /** Branch on a variable. Which comparisons are legal depends on its type. */
+  | {
+      type: "ifVar";
+      name: string;
+      compare: ">" | ">=" | "<" | "<=" | "==" | "!=" | "contains" | "isTrue" | "isFalse";
+      /** Absent for `isTrue`/`isFalse`, which ask about the variable alone. */
+      value?: string | number;
+      /** Compare against another variable instead of a fixed value. */
+      fromVar?: string;
+      then: ScriptStep[];
+      else?: ScriptStep[];
+    }
   /** Read the first number in the region and compare it. */
   | {
       type: "ifNumber";
@@ -131,11 +202,15 @@ type ScriptStepKind =
       value: number;
       then: ScriptStep[];
       else?: ScriptStep[];
+      /** Keep what this step found, under a declared variable name. */
+      saveTo?: string;
     };
 
 /** What each step is called. Shared so the runner's log says the same word the
  * editor puts on the row, and a log line can be matched to what produced it. */
 export const SCRIPT_STEP_LABELS: Record<ScriptStep["type"], string> = {
+  call: "呼叫模組",
+  ifVar: "若變數",
   findTap: "找圖點擊",
   ifImage: "若找到圖",
   tapText: "依文字點擊",
@@ -169,6 +244,16 @@ export const PRIORITY_LABELS: { value: number; label: string }[] = [
 
 export interface Script {
   id: string;
+  /**
+   * Callable from another script as a step, and kept out of the scheduler.
+   *
+   * A module is an ordinary script — same steps, same editor — so anything can
+   * become one and a module can call further modules. The flag only decides
+   * where it appears: in the call picker, or in the schedule.
+   */
+  isModule?: boolean;
+  /** Declared values: what it takes, what it returns, what it keeps. */
+  variables?: ScriptVariable[];
   /**
    * Devices the scheduler runs this on. A script is a procedure, not a
    * property of one phone — coordinates are normalized and text matching is

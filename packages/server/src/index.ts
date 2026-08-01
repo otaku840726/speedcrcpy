@@ -55,6 +55,8 @@ scriptEngine.onCapture((serial, frame) => {
 });
 // What a script is doing, to read against the picture from the same moment.
 scriptEngine.onLog((serial, scriptName, message) => replayStore.note(serial, scriptName, message));
+// A `call` step names a script; this is how the engine turns that into steps.
+scriptEngine.onResolveScript((id) => scriptStore.get(id));
 // And while nothing is automating the device, the thumbnail loop's own captures
 // keep the replay running — no screencap exists solely for the recording.
 thumbnailManager.onCapture((serial, frame) => replayStore.offer(serial, frame));

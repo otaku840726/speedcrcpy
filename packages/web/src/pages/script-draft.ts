@@ -1,4 +1,4 @@
-import type { Script, ScriptStep, ScriptTrigger } from "@speedcrcpy/shared";
+import type { Script, ScriptStep, ScriptTrigger, ScriptVariable } from "@speedcrcpy/shared";
 
 /**
  * The editing side of a script: what is on screen, which is not necessarily
@@ -11,6 +11,11 @@ export interface Draft {
   key: string;
   id?: string;
   name: string;
+  /** Callable as a step by other scripts, and out of the scheduler. */
+  isModule?: boolean;
+  /** What it takes, returns, and keeps — part of the script, so part of the
+   * draft and part of what "unsaved" compares. */
+  variables?: ScriptVariable[];
   steps: ScriptStep[];
   trigger: ScriptTrigger;
   priority: number;
@@ -22,6 +27,8 @@ export interface Draft {
 export const draftBody = (draft: Draft) => ({
   id: draft.id,
   name: draft.name,
+  isModule: draft.isModule,
+  variables: draft.variables,
   steps: draft.steps,
   trigger: draft.trigger,
   priority: draft.priority,
@@ -33,6 +40,8 @@ export const asDraft = (script: Script): Draft => ({
   key: script.id,
   id: script.id,
   name: script.name,
+  isModule: script.isModule,
+  variables: script.variables,
   steps: script.steps,
   trigger: script.trigger,
   priority: script.priority,

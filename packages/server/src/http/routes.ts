@@ -1,4 +1,4 @@
-import { MAX_TEMPLATE_BASE64 } from "@speedcrcpy/shared";
+import { MAX_TEMPLATE_BASE64, type ScriptStep } from "@speedcrcpy/shared";
 import { AdbServerClient } from "@yume-chan/adb";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -61,6 +61,13 @@ const PickSchema = z
  * zod strips unknown keys rather than rejecting them, so leaving it off one
  * member would drop the flag on save and that step would quietly come back on. */
 const offSwitch = { disabled: z.boolean().optional() };
+/** Variable names are referenced from text as {{name}}, so keep them to
+ * something that cannot be confused with the braces around them. */
+const VarName = z.string().min(1).max(30).regex(/^[^{}\s]+$/);
+/** Anything a variable can hold, which is also anything an argument can pass. */
+const VarValue = z.union([z.string().max(1000), z.number(), z.boolean(), TemplateSchema, RegionSchema]);
+/** On the steps that produce something worth keeping. */
+const saveSwitch = { saveTo: VarName.optional() };
 /** Step tree — recursive because `loop` nests a body. */
 const StepSchema: z.ZodType<unknown> = z.lazy(() =>
   z.discriminatedUnion("type", [
@@ -80,6 +87,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
       ...offSwitch,
+      ...saveSwitch,
     }),
     z.object({
       type: z.literal("findTap"),
@@ -93,6 +101,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       filter: FilterSchema,
       pick: PickSchema,
       ...offSwitch,
+      ...saveSwitch,
     }),
     z.object({
       type: z.literal("tapText"),
@@ -105,6 +114,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       offsetX: z.coerce.number().min(-1).max(1).optional(),
       offsetY: z.coerce.number().min(-1).max(1).optional(),
       ...offSwitch,
+      ...saveSwitch,
     }),
     z.object({
       type: z.literal("ifText"),
@@ -113,12 +123,34 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
       ...offSwitch,
+      ...saveSwitch,
     }),
     z.object({
       type: z.literal("ifNumber"),
       region: RegionSchema.optional(),
       compare: z.enum([">", ">=", "<", "<=", "=="]),
       value: z.coerce.number(),
+      then: z.array(StepSchema).max(200),
+      else: z.array(StepSchema).max(200).optional(),
+      ...offSwitch,
+      ...saveSwitch,
+    }),
+    z.object({
+      type: z.literal("call"),
+      scriptId: z.string().min(1).max(64),
+      args: z
+        .array(z.object({ param: VarName, value: VarValue.optional(), fromVar: VarName.optional() }))
+        .max(20)
+        .default([]),
+      outputs: z.array(z.object({ param: VarName, toVar: VarName })).max(20).default([]),
+      ...offSwitch,
+    }),
+    z.object({
+      type: z.literal("ifVar"),
+      name: VarName,
+      compare: z.enum([">", ">=", "<", "<=", "==", "!=", "contains", "isTrue", "isFalse"]),
+      value: z.union([z.string().max(1000), z.coerce.number()]).optional(),
+      fromVar: VarName.optional(),
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
       ...offSwitch,
@@ -131,6 +163,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
       ...offSwitch,
+      ...saveSwitch,
     }),
   ]),
 );
@@ -139,9 +172,36 @@ const TriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("persistent") }),
   z.object({ type: z.literal("daily"), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }),
 ]);
+/** Where a step sits in the tree — the same address the editor uses. */
+const RunBody = z.object({
+  path: z
+    .array(z.object({ index: z.coerce.number().int().min(0).max(200), branch: z.enum(["body", "then", "else"]).optional() }))
+    .max(20)
+    .optional(),
+});
+
+function stepAt(steps: unknown[], path: { index: number; branch?: string }[]): ScriptStep | undefined {
+  let list = steps as Record<string, unknown>[];
+  let step: Record<string, unknown> | undefined;
+  for (const hop of path) {
+    step = list[hop.index];
+    if (!step) return undefined;
+    if (hop.branch) list = (step[hop.branch] ?? []) as Record<string, unknown>[];
+  }
+  return step as ScriptStep | undefined;
+}
+
+const VariableSchema = z.object({
+  name: VarName,
+  type: z.enum(["number", "text", "boolean", "image", "region"]),
+  kind: z.enum(["in", "out", "local"]),
+  default: VarValue.optional(),
+});
 const ScriptBody = z.object({
   devices: z.array(z.string().min(1).max(200)).max(50).default([]),
   id: z.string().optional(),
+  isModule: z.boolean().optional(),
+  variables: z.array(VariableSchema).max(30).optional(),
   name: z.string().min(1).max(60),
   steps: z.array(StepSchema).max(200),
   trigger: TriggerSchema.default({ type: "manual" }),
@@ -168,6 +228,48 @@ function hasOversizeTemplate(value: unknown): boolean {
   const png = (value as { template?: { png?: unknown } }).template?.png;
   if (typeof png === "string" && png.length > MAX_TEMPLATE_BASE64) return true;
   return Object.values(value).some(hasOversizeTemplate);
+}
+
+/** Every module a step tree calls, directly. */
+function calledIds(steps: unknown[]): string[] {
+  return (steps as Record<string, unknown>[]).flatMap((step) => [
+    ...(step.type === "call" && typeof step.scriptId === "string" ? [step.scriptId] : []),
+    ...calledIds((step.body ?? step.then ?? []) as unknown[]),
+    ...calledIds((step.else ?? []) as unknown[]),
+  ]);
+}
+
+/**
+ * Would saving this make a script that calls itself, however indirectly?
+ *
+ * Checked at save time because that is where it can still be explained. At run
+ * time a cycle is just a stack that grows until something gives, and the depth
+ * limit in the engine is a backstop rather than an answer.
+ */
+function callCycle(store: ScriptStore, id: string | undefined, steps: unknown[]): string | undefined {
+  const seen = new Set<string>();
+  const walk = (ids: string[], trail: string[]): string | undefined => {
+    for (const next of ids) {
+      if (next === id) return [...trail, store.get(next)?.name ?? next].join(" → ");
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const target = store.get(next);
+      if (!target) continue;
+      const found = walk(calledIds(target.steps), [...trail, target.name]);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return walk(calledIds(steps), ["這支腳本"]);
+}
+
+/** Which scripts call this one — for the editor's warning, and for refusing to
+ * delete something other scripts are standing on. */
+function usedBy(store: ScriptStore, id: string): { id: string; name: string }[] {
+  return store
+    .list()
+    .filter((script) => script.id !== id && calledIds(script.steps).includes(id))
+    .map(({ id: usedId, name }) => ({ id: usedId, name }));
 }
 
 /** A body that failed validation only because its template is enormous should
@@ -387,6 +489,8 @@ export function registerRoutes(
   app.post("/api/scripts", async (request, reply) => {
     const body = ScriptBody.safeParse(request.body);
     if (!body.success) return rejectInvalid(reply, request.body);
+    const cycle = callCycle(scriptStore, body.data.id, body.data.steps as unknown[]);
+    if (cycle) return reply.code(409).send({ error: `模組會繞回自己:${cycle}` });
     const saved = scriptStore.save(body.data as never);
     // Editing a script is a fresh intent — in particular, re-enabling one that
     // was stopped should let it be scheduled again.
@@ -395,6 +499,12 @@ export function registerRoutes(
   });
 
   app.delete<{ Params: { id: string } }>("/api/scripts/:id", async (request, reply) => {
+    // Deleting a module out from under its callers would leave them failing at
+    // run time with nothing to point at. Say who is using it instead.
+    const users = usedBy(scriptStore, request.params.id);
+    if (users.length) {
+      return reply.code(409).send({ error: `還有 ${users.length} 支腳本使用這個模組:${users.map((u) => u.name).join("、")}` });
+    }
     // The draft goes with the script; leaving it behind would offer to restore
     // edits to something that no longer exists.
     draftStore.delete(request.params.id);
@@ -492,11 +602,31 @@ export function registerRoutes(
     return { ok: true };
   });
 
+  app.get<{ Params: { id: string } }>("/api/scripts/:id/usage", async (request) => ({
+    usedBy: usedBy(scriptStore, request.params.id),
+  }));
+
   /** Run on the device the caller is looking at, whatever the script's own
    * scheduled devices are — pressing 執行 means "here, now". */
   app.post<{ Params: { id: string; serial: string } }>("/api/devices/:serial/scripts/:id/run", async (request, reply) => {
     const script = scriptStore.get(request.params.id);
     if (!script) return reply.code(404).send({ error: "not_found" });
+
+    // A path means "just this block" — a debugging run, so it goes straight to
+    // the engine rather than through the scheduler: nothing about it should
+    // outrank, queue behind, or preempt scheduled work. Busy means busy.
+    const only = RunBody.safeParse(request.body ?? {});
+    if (only.success && only.data.path?.length) {
+      const step = stepAt(script.steps, only.data.path);
+      if (!step) return reply.code(400).send({ error: "bad_request" });
+      try {
+        await scriptEngine.start({ ...script, steps: [step] }, request.params.serial);
+      } catch (error) {
+        return reply.code(409).send({ error: error instanceof Error ? error.message : "run_failed" });
+      }
+      return { ok: true };
+    }
+
     scheduler.requestRun(script, request.params.serial);
     return { ok: true };
   });

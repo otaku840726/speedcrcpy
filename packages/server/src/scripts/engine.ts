@@ -7,6 +7,7 @@ import {
 } from "@speedcrcpy/shared";
 import type {
   Script,
+  ScriptArg,
   ScriptKey,
   ScriptLogEntry,
   ScriptRegion,
@@ -62,6 +63,16 @@ async function sh(adb: Adb, command: string): Promise<string> {
 /** Stop signal thrown to unwind out of nested loops when a run is cancelled. */
 class Stopped extends Error {}
 
+/**
+ * The values a script can see while it runs.
+ *
+ * One of these per script *activation*, not per run: calling a module makes a
+ * fresh scope holding only the arguments it was given, so a module cannot read
+ * or clobber anything belonging to whoever called it. That isolation is the
+ * whole reason calling a module is safer than pasting its steps.
+ */
+type Scope = Map<string, unknown>;
+
 interface Run {
   script: Script;
   serial: string;
@@ -76,6 +87,63 @@ interface Run {
   scaleWarned: Set<string>;
   /** A failed capture is logged once, not once per poll. */
   captureWarned: boolean;
+  /** The script's own variables; a module call runs against a different one. */
+  scope: Scope;
+  /** How many module calls deep — a backstop under the cycle check that runs at
+   * save time, since a script can be edited between saving and running. */
+  depth: number;
+}
+
+/** Modules can call modules; this is where that stops being sane. */
+const MAX_CALL_DEPTH = 12;
+
+/** The variables a script starts with when nobody called it: declared inputs
+ * fall back to their defaults, everything else begins unset. */
+function initialScope(script: Script): Scope {
+  const scope: Scope = new Map();
+  for (const v of script.variables ?? []) if (v.kind === "in" && v.default !== undefined) scope.set(v.name, v.default);
+  return scope;
+}
+
+/**
+ * The scope a module runs in: its own declared inputs, filled from the call
+ * site, and nothing else. A caller variable reaches the module only by being
+ * named in an argument — which is what makes a module behave the same way
+ * wherever it is used.
+ */
+function callScope(module: Script, args: ScriptArg[], caller: Scope): Scope {
+  const scope = initialScope(module);
+  for (const arg of args) {
+    const value = arg.fromVar ? caller.get(arg.fromVar) : arg.value;
+    if (value !== undefined) scope.set(arg.param, value);
+  }
+  return scope;
+}
+
+/** Readable in a log line without dumping a base64 template into it. */
+function describeValue(value: unknown): string {
+  if (value === undefined) return "(未設定)";
+  if (typeof value === "boolean") return value ? "真" : "假";
+  if (typeof value === "object") return "(圖像/範圍)";
+  return String(value).slice(0, 40);
+}
+
+/**
+ * Compare per the operator the editor offered, which is already narrowed by the
+ * variable's type. An unset variable never satisfies a comparison — a script
+ * that reads nothing should take the "else" branch rather than a coincidence.
+ */
+function compareVar(left: unknown, compare: string, right: unknown): boolean {
+  if (compare === "isTrue") return left === true;
+  if (compare === "isFalse") return left === false;
+  if (left === undefined || right === undefined) return false;
+  if (compare === "contains") return String(left).includes(String(right));
+  if (compare === "==") return String(left) === String(right);
+  if (compare === "!=") return String(left) !== String(right);
+  const a = Number(left);
+  const b = Number(right);
+  if (Number.isNaN(a) || Number.isNaN(b)) return false;
+  return compare === ">" ? a > b : compare === ">=" ? a >= b : compare === "<" ? a < b : a <= b;
 }
 
 /**
@@ -96,6 +164,8 @@ export class ScriptEngine {
   /** Offered every frame a step captures, so the thumbnail cache can ride along
    * instead of screencapping the same device again on its own timer. */
   private onFrame: ((serial: string, frame: Frame) => void) | undefined;
+  /** How a `call` step finds the script it names. */
+  private resolveScript: ((id: string) => Script | undefined) | undefined;
   /** Every log line, for anything that shows what a script was doing beside
    * something else — the device replay reads them as captions. */
   private onLogLine: ((serial: string, scriptName: string, message: string) => void) | undefined;
@@ -112,6 +182,10 @@ export class ScriptEngine {
 
   onLog(handler: (serial: string, scriptName: string, message: string) => void): void {
     this.onLogLine = handler;
+  }
+
+  onResolveScript(resolve: (id: string) => Script | undefined): void {
+    this.resolveScript = resolve;
   }
 
   isRunning(serial: string): boolean {
@@ -162,6 +236,10 @@ export class ScriptEngine {
       height,
       scaleWarned: new Set(),
       captureWarned: false,
+      // A top-level run has no caller, so its `in` variables can only be their
+      // defaults; `local` and `out` start empty and are filled by steps.
+      scope: initialScope(script),
+      depth: 0,
     };
     this.runs.set(serial, run);
     this.finished.delete(serial);
@@ -303,10 +381,11 @@ export class ScriptEngine {
         return;
       }
       case "text": {
+        const typed = this.fill(run, step.value);
         // `input text` takes no spaces; %s is the documented escape.
-        const escaped = step.value.replace(/(["\\$`])/g, "\\$1").replace(/ /g, "%s");
+        const escaped = typed.replace(/(["\\$`])/g, "\\$1").replace(/ /g, "%s");
         await sh(adb, `input text "${escaped}"`);
-        this.log(run, `輸入文字 (${step.value.length} 字)`);
+        this.log(run, `輸入文字 (${typed.length} 字)`);
         return;
       }
       case "key": {
@@ -354,6 +433,7 @@ export class ScriptEngine {
         this.syncSize(run, frame);
         const got = colorAt(frame, step.x, step.y);
         const hit = colorMatches(got, parseHex(step.color), step.tolerance);
+        this.save(run, step.saveTo, hit);
         this.log(run, `若顏色 ${step.color}:${hit ? "符合" : `不符(${hex(got)})`}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
@@ -373,10 +453,12 @@ export class ScriptEngine {
               const ny = sel.chosen.y + (step.offsetY ?? 0);
               const [px, py] = this.toPixels(run, nx, ny);
               await sh(adb, `input tap ${px} ${py}`);
+              this.save(run, step.saveTo, true);
               this.log(run, `找圖命中 ${this.nth(sel, step.pick)} ${(sel.chosen.confidence * 100).toFixed(0)}% → 點擊 ${px},${py}`);
               return;
             }
             if (Date.now() >= deadline) {
+              this.save(run, step.saveTo, false);
               this.log(
                 run,
                 match.matches.length
@@ -386,11 +468,45 @@ export class ScriptEngine {
               return;
             }
           } else if (Date.now() >= deadline) {
+            this.save(run, step.saveTo, false);
             this.log(run, "找圖逾時:期間都擷取不到畫面");
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
         }
+      }
+      case "call": {
+        const module = this.resolveScript?.(step.scriptId);
+        if (!module) throw new Error("找不到要呼叫的模組(可能已被刪除)");
+        if (run.depth >= MAX_CALL_DEPTH) throw new Error(`模組呼叫太深(超過 ${MAX_CALL_DEPTH} 層),已中止`);
+
+        // Only the arguments cross the boundary. Anything the module does not
+        // declare as an input simply is not there, whatever the caller holds.
+        const inner: Run = {
+          ...run,
+          script: module,
+          scope: callScope(module, step.args, run.scope),
+          depth: run.depth + 1,
+        };
+        this.log(run, `呼叫模組「${module.name}」`);
+        await this.runSteps(adb, inner, module.steps);
+        // And only the declared outputs come back.
+        for (const { param, toVar } of step.outputs) {
+          if (inner.scope.has(param)) run.scope.set(toVar, inner.scope.get(param));
+        }
+        // The inner run shares the counters and log; carry the ones it moved.
+        run.stepsRun = inner.stepsRun;
+        run.width = inner.width;
+        run.height = inner.height;
+        return;
+      }
+      case "ifVar": {
+        const left = run.scope.get(step.name);
+        const right = step.fromVar ? run.scope.get(step.fromVar) : step.value;
+        const hit = compareVar(left, step.compare, right);
+        this.log(run, `若變數 ${step.name}(${describeValue(left)})${step.compare}${step.fromVar ?? describeValue(right)}:${hit ? "成立" : "不成立"}`);
+        await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
+        return;
       }
       case "ifImage": {
         const frame = await this.grab(run, adb);
@@ -398,6 +514,7 @@ export class ScriptEngine {
         this.warnTemplateScale(run, step.template, frame.width, frame.height);
         const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
         const hit = match.matches.length > 0;
+        this.save(run, step.saveTo, hit);
         this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
@@ -412,8 +529,9 @@ export class ScriptEngine {
             // Matches are the words themselves, narrowed down from the band they
             // sit in — OCR merges a whole horizontal row (icon and all) into one
             // box, so its centre is rarely on the text you asked for.
-            const result = await recognize(frame, step.region, step.text);
-            const pick = scriptSelect(result.matches, step.text, step.filter, step.pick, frame);
+            const needle = this.fill(run, step.text);
+            const result = await recognize(frame, step.region, needle);
+            const pick = scriptSelect(result.matches, needle, step.filter, step.pick, frame);
             if (pick.chosen) {
               const [px, py] = this.toPixels(run, pick.chosen.x + (step.offsetX ?? 0), pick.chosen.y + (step.offsetY ?? 0));
               await sh(adb, `input tap ${px} ${py}`);
@@ -433,7 +551,8 @@ export class ScriptEngine {
       }
       case "ifText": {
         const result = await recognize(await this.grab(run, adb), step.region);
-        const hit = textMatches(result.text, step.text);
+        const hit = textMatches(result.text, this.fill(run, step.text));
+        this.save(run, step.saveTo, hit);
         this.log(run, `若文字含「${step.text}」:${hit ? "是" : `否(讀到:${result.text.slice(0, 30) || "空"})`}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
@@ -448,6 +567,7 @@ export class ScriptEngine {
             (step.compare === "<" && value < step.value) ||
             (step.compare === "<=" && value <= step.value) ||
             (step.compare === "==" && value === step.value));
+        this.save(run, step.saveTo, value);
         this.log(run, `讀取數值:${value ?? "(讀不到)"} ${step.compare} ${step.value} → ${hit ? "成立" : "不成立"}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
@@ -509,6 +629,27 @@ export class ScriptEngine {
       await new Promise((resolve) => setTimeout(resolve, slice));
       left -= slice;
     } while (left > 0);
+  }
+
+  /**
+   * Substitute {{name}} for what the variable holds.
+   *
+   * Only names the scope actually knows are replaced; anything else is left
+   * exactly as typed. Scripts written before variables existed cannot change
+   * meaning because of a stray pair of braces in their text.
+   */
+  private fill(run: Run, text: string): string {
+    if (!text.includes("{{")) return text;
+    return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (whole, name: string) =>
+      run.scope.has(name) ? String(run.scope.get(name) ?? "") : whole,
+    );
+  }
+
+  /** Keep a step's result under a declared name, if the step asked to. */
+  private save(run: Run, name: string | undefined, value: unknown): void {
+    if (!name) return;
+    run.scope.set(name, value);
+    this.log(run, `  ${name} = ${describeValue(value)}`);
   }
 
   private log(run: Run, message: string): void {

@@ -155,6 +155,7 @@ export class Scheduler {
     const bySerial = new Map<string, ScheduleScript[]>();
     // A script can be scheduled on several devices, so it appears under each.
     for (const script of this.store.list()) {
+      if (script.isModule) continue;
       for (const serial of script.devices) {
       const state = this.devices.get(serial);
       const running = this.engine.status(serial);
@@ -259,6 +260,10 @@ export class Scheduler {
     const today = dayKey(now);
     const minutes = now.getHours() * 60 + now.getMinutes();
     for (const script of this.store.list()) {
+      // A module runs because something called it. Letting one activate on its
+      // own would run it outside any caller, with no arguments and nowhere to
+      // return anything to.
+      if (script.isModule) continue;
       if (!script.enabled) {
         for (const serial of script.devices) this.devices.get(serial)?.activations.delete(script.id);
         continue;

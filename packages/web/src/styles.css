@@ -1864,3 +1864,130 @@ button.tp-swatch:not(:disabled):hover {
 .sp-replay-script {
   color: var(--accent);
 }
+
+/* Fold control: a block says how much it is hiding, so a folded script still
+   reads as a plan rather than a list of mysteries. */
+.sp-fold,
+.sp-fold-gap {
+  flex: none;
+  width: 20px;
+  padding: 2px;
+}
+.sp-fold {
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.sp-fold:hover {
+  color: var(--text);
+}
+
+/* What a script takes, returns and keeps — above the steps because it is the
+   contract, not a detail. */
+.sp-vars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 8px;
+}
+.sp-vars-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sp-vars-head button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.sp-var {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.sp-var select {
+  font-size: 11px;
+  padding: 2px 20px 2px 6px;
+}
+.sp-var-name {
+  width: 92px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.sp-var-default {
+  width: 70px;
+  font-size: 12px;
+  padding: 3px 6px;
+}
+.sp-var button {
+  padding: 2px 6px;
+}
+
+/* A call site: the module, then what goes in and comes out. */
+.sp-module {
+  font-size: 12px;
+  padding: 3px 22px 3px 8px;
+  max-width: 150px;
+}
+.sp-arg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(77, 163, 255, 0.08);
+}
+.sp-arg.out {
+  background: rgba(124, 245, 176, 0.08);
+}
+.sp-arg select {
+  font-size: 11px;
+  padding: 2px 20px 2px 6px;
+  max-width: 110px;
+}
+.sp-arg button,
+.sp-arg-bool {
+  font-size: 11px;
+  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.sp-actions button.on,
+.sp-arg button.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Another script's body, edited inside this one. The rule and the tint say
+   "this is not the script you are looking at". */
+.sp-module-edit {
+  margin: 6px 0 0 10px;
+  border-left: 3px solid var(--accent);
+  background: rgba(77, 163, 255, 0.05);
+  border-radius: 0 8px 8px 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.sp-module-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+.sp-module-head button {
+  font-size: 11px;
+  padding: 3px 9px;
+}
+.sp-module-name {
+  color: var(--accent);
+  font-size: 12px;
+}
