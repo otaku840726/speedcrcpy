@@ -65,8 +65,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
+      # Telling the home server to pull now. The image is already in the
+      # registry by this point, and Watchtower polls on its own schedule, so a
+      # notification that does not get through delays the update — it does not
+      # lose it. Failing the whole run for that turns every unreachable-server
+      # moment into a red build, and a red build that is usually nothing is a
+      # red build nobody reads. Capped rather than left to hang: the failure
+      # that prompted this was a 524 after two minutes of waiting.
       - name: Trigger Watchtower Update
         uses: darnfish/watchtower-update@v3.3
+        continue-on-error: true
+        timeout-minutes: 2
         with:
           url: "${{ secrets.WATCHTOWER_URL }}"
           api_token: "${{ secrets.WATCHTOWER_API_TOKEN }}"
