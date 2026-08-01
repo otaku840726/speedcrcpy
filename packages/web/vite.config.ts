@@ -24,7 +24,10 @@ export default defineConfig({
         short_name: "speedcrcpy",
         description: "Remote control your Android devices from any browser",
         display: "standalone",
-        orientation: "any",
+        // No `orientation`: an installed PWA that declares one overrides the
+        // system auto-rotate switch for itself, so this app rotated on a phone
+        // whose owner had rotation locked and every other app stayed put.
+        // Which way the screen faces is the user's decision, not this app's.
         background_color: "#101418",
         theme_color: "#101418",
         icons: [
