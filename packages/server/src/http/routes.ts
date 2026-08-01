@@ -15,7 +15,8 @@ import type { ReplayStore } from "../scripts/replay-store.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import { ocrModel } from "../scripts/ocr.js";
-import { findTemplate, recognize } from "../scripts/vision-offload.js";
+import { findTemplate, recognize, visionStatus } from "../scripts/vision-offload.js";
+import { memoryBlocks } from "../scripts/vision-health.js";
 import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { readFile } from "node:fs/promises";
@@ -222,7 +223,21 @@ export function registerRoutes(
   // poll which build is live without a token. `version` is the git SHA.
   // `ocr` is here so a silent fall back to the bundled PP-OCRv4 — which reads
   // traditional Chinese wrongly but never errors — is visible from outside.
-  app.get("/api/health", async () => ({ ok: true, version: VERSION, builtAt: BUILT_AT, ocr: ocrModel() }));
+  app.get("/api/health", async () => ({
+    ok: true,
+    version: VERSION,
+    builtAt: BUILT_AT,
+    ocr: ocrModel(),
+    // Growth here is what breaks text recognition after hours of running, and
+    // it used to be invisible from outside the container. A block at 1024 MB is
+    // a WebAssembly heap at its ceiling — see vision-health.ts.
+    memory: {
+      rssMb: Math.round(process.memoryUsage().rss / 1048576),
+      externalMb: Math.round(process.memoryUsage().external / 1048576),
+      blocksMb: memoryBlocks().map((b) => b.mb),
+      vision: visionStatus(),
+    },
+  }));
 
   app.post("/api/login", async (request, reply) => {
     const body = LoginBody.safeParse(request.body);
