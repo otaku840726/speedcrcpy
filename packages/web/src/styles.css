@@ -929,12 +929,15 @@ option {
 }
 .sp-line {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  /* Top, not centre: a step whose settings wrap to three lines used to push the
+     on/off switch into the middle of them and leave the buttons floating in
+     dead space above and below. Everything now starts on the first line. */
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .sp-onoff {
   flex: none;
-  margin: 0;
   cursor: pointer;
 }
 /* A switched-off step keeps its place and its settings, and says so by fading —
@@ -949,15 +952,23 @@ option {
 .sp-body {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   flex-wrap: wrap;
-  flex: 1;
+  /* A fixed basis, not `auto`: with `auto` the settings ask for their full
+     max-content width, do not fit beside the on/off switch, and wrap to a line
+     of their own — leaving the switch alone on a row of its own. 200px fits
+     beside it and then grows into whatever is left. Measured on a wrapping
+     step: 198px of row height before any of this, 93px after. */
+  flex: 1 1 200px;
   min-width: 0;
 }
 .sp-actions {
   display: flex;
+  align-items: flex-start;
   gap: 3px;
   flex: none;
+  /* Right-aligned whether they sit beside the settings or on the line below. */
+  margin-left: auto;
 }
 .sp-actions button {
   padding: 3px 5px;
