@@ -123,6 +123,25 @@ export function Session({
     clientRef.current?.send(message);
   }, []);
 
+  /**
+   * Let go of control on the way out of sight.
+   *
+   * A backgrounded client — a PWA behind another app, a phone in a pocket —
+   * keeps its socket for a while and so keeps the seat, leaving the client
+   * actually in your hands stuck in 檢視模式 until you press 取得控制. Nothing
+   * inherits the seat; the next client you touch takes it. Sent unconditionally
+   * because the server ignores it from anyone who is not holding control, which
+   * is cheaper than tracking that here. `visibilitychange` runs before the page
+   * is frozen, so the frame still gets out.
+   */
+  useEffect(() => {
+    const onHide = () => {
+      if (document.hidden) send({ type: "releaseControl" });
+    };
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
+  }, [send]);
+
   const toggleMute = useCallback(() => {
     const next = !mutedRef.current;
     mutedRef.current = next;
@@ -579,9 +598,18 @@ export function Session({
         )}
         {!controlling && (
           <>
-            {/* Transparent catcher: taps on the video (ignored server-side in
-                view mode) flash the hint instead of silently doing nothing. */}
-            <div className="view-catch" onClick={showControlHint} />
+            {/* Transparent catcher: taps on the video never reach the device in
+                view mode. If the seat is empty this one claims it, so switching
+                between your own clients costs a tap on the screen rather than a
+                hunt for the button; if someone is driving the claim is refused
+                server-side and the hint flashes, as before. */}
+            <div
+              className="view-catch"
+              onClick={() => {
+                send({ type: "claimControl" });
+                showControlHint();
+              }}
+            />
             {controlHint && (
               <button className="control-hint" onClick={() => send({ type: "takeControl" })}>
                 檢視模式 — 點擊取得控制權
