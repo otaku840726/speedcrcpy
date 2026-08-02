@@ -64,6 +64,28 @@ async function sh(adb: Adb, command: string): Promise<string> {
 class Stopped extends Error {}
 
 /**
+ * Control flow that has to cross a boundary someone else owns.
+ *
+ * A jump has to leave the list it was written in if its target is further out;
+ * leaving a loop has to unwind whatever branches sit between the step and the
+ * loop; returning from a module has to pass every one of those on the way. All
+ * three are therefore thrown rather than returned, and each is caught by
+ * exactly the level that owns it: `runSteps` catches a jump whose target is on
+ * its own list, the loop catches its own break and continue, and the call step
+ * catches a module return. Anything not owned here keeps travelling.
+ */
+class Jump extends Error {
+  constructor(readonly target: string) {
+    super(`goto ${target}`);
+  }
+}
+class Leave extends Error {
+  constructor(readonly scope: "loop" | "iteration" | "module") {
+    super(`stop ${scope}`);
+  }
+}
+
+/**
  * The values a script can see while it runs.
  *
  * One of these per script *activation*, not per run: calling a module makes a
@@ -92,6 +114,8 @@ interface Run {
   /** How many module calls deep — a backstop under the cycle check that runs at
    * save time, since a script can be edited between saving and running. */
   depth: number;
+  /** The name of the step being run, prefixed onto its log lines. */
+  labelling?: string;
 }
 
 /** Modules can call modules; this is where that stops being sane. */
@@ -282,18 +306,35 @@ export class ScriptEngine {
   }
 
   private async runSteps(adb: Adb, run: Run, steps: ScriptStep[]): Promise<void> {
-    for (const step of steps) {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i]!;
       this.checkStop(run);
       // Switched off, not deleted. Said out loud rather than skipped in silence:
       // a script that does nothing where you expected something is a worse
       // puzzle than a log line saying which step is parked. A disabled loop or
       // if-step never runs, so its children never run either.
       if (step.disabled) {
-        this.log(run, `略過(已關閉):${SCRIPT_STEP_LABELS[step.type]}`);
+        this.log(run, `略過(已關閉):${this.name(step)}`);
         continue;
       }
-      await this.runStep(adb, run, step);
+      try {
+        await this.runStep(adb, run, step);
+      } catch (error) {
+        // A jump lands here if this list holds the label; otherwise it belongs
+        // to a list further out and keeps going.
+        if (!(error instanceof Jump)) throw error;
+        const target = steps.findIndex((s) => s.label === error.target);
+        if (target < 0) throw error;
+        this.log(run, `跳到「${error.target}」`);
+        i = target - 1;
+      }
     }
+  }
+
+  /** What to call a step in the log: its name if it has one. */
+  private name(step: ScriptStep): string {
+    const kind = SCRIPT_STEP_LABELS[step.type];
+    return step.label ? `${step.label}(${kind})` : kind;
   }
 
   /** "(3 個中的第 2 個)" — silent when there was only ever one candidate, so
@@ -357,6 +398,9 @@ export class ScriptEngine {
 
   private async runStep(adb: Adb, run: Run, step: ScriptStep): Promise<void> {
     if (++run.stepsRun > MAX_STEPS_PER_RUN) throw new Error("超過步驟上限,已中止");
+    // Named steps prefix their log lines, which is the difference between
+    // reading a log of twenty 依文字點擊 and reading one that says which.
+    run.labelling = step.label;
 
     switch (step.type) {
       case "tap": {
@@ -398,7 +442,14 @@ export class ScriptEngine {
         for (let i = 0; forever || i < step.count; i++) {
           this.checkStop(run);
           this.log(run, `迴圈 #${i + 1}${forever ? "" : `/${step.count}`}`);
-          await this.runSteps(adb, run, step.body);
+          try {
+            await this.runSteps(adb, run, step.body);
+          } catch (error) {
+            // This loop is the nearest one, so it owns both of these; anything
+            // else (a module return, a jump to an outer label) travels on.
+            if (!(error instanceof Leave) || error.scope === "module") throw error;
+            if (error.scope === "loop") return;
+          }
           // Yield so a forever-loop of instant steps can't starve the process.
           await this.sleep(0);
         }
@@ -475,6 +526,16 @@ export class ScriptEngine {
           await this.sleep(POLL_INTERVAL_MS, run);
         }
       }
+      case "goto":
+        throw new Jump(step.target);
+      case "stop":
+        if (step.scope === "script") {
+          this.log(run, "停止:整支腳本");
+          run.stopping = true;
+          throw new Stopped();
+        }
+        this.log(run, `停止:${step.scope === "loop" ? "跳出迴圈" : step.scope === "iteration" ? "下一輪" : "結束模組"}`);
+        throw new Leave(step.scope);
       case "call": {
         const module = this.resolveScript?.(step.scriptId);
         if (!module) throw new Error("找不到要呼叫的模組(可能已被刪除)");
@@ -489,7 +550,24 @@ export class ScriptEngine {
           depth: run.depth + 1,
         };
         this.log(run, `呼叫模組「${module.name}」`);
-        await this.runSteps(adb, inner, module.steps);
+        try {
+          await this.runSteps(adb, inner, module.steps);
+        } catch (error) {
+          // Returning early from the module is this step's business; a stop
+          // aimed at the whole script is not.
+          if (error instanceof Leave && error.scope === "module") {
+            /* the module returned early — carry on with its outputs as they are */
+          } else if (error instanceof Jump) {
+            // A jump that got this far found no label inside the module. It
+            // must not continue into the caller: names there are not the
+            // module's to see, and one that happened to match would send the
+            // run somewhere nobody wrote. Saving normally refuses this, but a
+            // module can be edited after the caller was saved.
+            throw new Error(`模組「${module.name}」裡的跳躍找不到標記「${error.target}」`);
+          } else {
+            throw error;
+          }
+        }
         // And only the declared outputs come back.
         for (const { param, toVar } of step.outputs) {
           if (inner.scope.has(param)) run.scope.set(toVar, inner.scope.get(param));
@@ -653,6 +731,7 @@ export class ScriptEngine {
   }
 
   private log(run: Run, message: string): void {
+    if (run.labelling) message = `[${run.labelling}] ${message}`;
     run.log.push({ at: Date.now(), message });
     this.onLogLine?.(run.serial, run.script.name, message);
     if (run.log.length > MAX_LOG) run.log.shift();

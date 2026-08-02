@@ -50,7 +50,20 @@ export const MAX_TEMPLATE_BASE64 = 4_000_000;
  * without one step has to be possible without losing it. A disabled loop or
  * if-step takes everything nested inside it out of the run too.
  */
-export type ScriptStep = ScriptStepKind & { disabled?: boolean };
+export type ScriptStep = ScriptStepKind & {
+  disabled?: boolean;
+  /**
+   * A name for this step.
+   *
+   * Doubles as the anchor `goto` jumps to, which is why jumping never breaks
+   * when steps move: the name travels with the step, unlike "the seventh one".
+   * It also earns its keep on scripts that never jump — the row shows it
+   * instead of a bare 依文字點擊, the run log prefixes its lines with it, and a
+   * folded block leads with it, so a long script folds into a table of
+   * contents rather than a list of identical verbs.
+   */
+  label?: string;
+};
 
 /**
  * What a variable holds. The type is chosen when the variable is declared, and
@@ -182,6 +195,26 @@ type ScriptStepKind =
    * `ifVar` like any other value. One way to branch, not two.
    */
   | { type: "call"; scriptId: string; args: ScriptArg[]; outputs: { param: string; toVar: string }[] }
+  /**
+   * Continue from the step whose name is `target` instead of the next one.
+   *
+   * The target must be labelled in the same list or an enclosing one — jumping
+   * into a branch or a loop body from outside would mean entering a context
+   * that does not exist yet. Jumping backwards is a loop, which is the point
+   * (retry until something works); the engine's step ceiling is what stops one
+   * that never finishes.
+   */
+  | { type: "goto"; target: string }
+  /**
+   * Stop, at a chosen level.
+   *
+   * `script` ends the run; `loop` leaves the nearest 重複 and carries on after
+   * it; `iteration` abandons this pass and starts the next; `module` returns to
+   * whatever called this script, with its outputs as they stand. A scope that
+   * has nothing to act on (leaving a loop when not in one) is a mistake worth
+   * catching when it is written, not when it runs.
+   */
+  | { type: "stop"; scope: "script" | "loop" | "iteration" | "module" }
   /** Branch on a variable. Which comparisons are legal depends on its type. */
   | {
       type: "ifVar";
@@ -209,6 +242,8 @@ type ScriptStepKind =
 /** What each step is called. Shared so the runner's log says the same word the
  * editor puts on the row, and a log line can be matched to what produced it. */
 export const SCRIPT_STEP_LABELS: Record<ScriptStep["type"], string> = {
+  goto: "跳到標記",
+  stop: "停止",
   call: "呼叫模組",
   ifVar: "若變數",
   findTap: "找圖點擊",

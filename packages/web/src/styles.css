@@ -2002,3 +2002,74 @@ button.tp-swatch:not(:disabled):hover {
   color: var(--accent);
   font-size: 12px;
 }
+
+/* A step's name. Empty it is a faint bookmark taking almost no room; set it
+   leads the row, because it is what the log and any jump will call this step. */
+.sp-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #a8a2ec;
+  border-color: #7f77dd;
+}
+.sp-label.empty {
+  color: var(--text-dim);
+  border-color: var(--border);
+  padding: 2px 5px;
+  opacity: 0.5;
+}
+.sp-label.empty:hover {
+  opacity: 1;
+}
+.sp-label-edit {
+  width: 110px;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+/* Screenshot: the picture beside what to do with it. */
+.sp-shot-body {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.sp-shot-body img {
+  max-width: 45%;
+  max-height: 320px;
+  border-radius: 8px;
+  background: #000;
+  display: block;
+}
+.sp-shot-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.sp-shot-side button,
+.sp-shot-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  background: var(--panel);
+}
+.sp-shot-side button.saved {
+  color: #7cf5b0;
+  border-color: #7cf5b0;
+}
+/* The filename is long and the panel is narrow — it may wrap, never overflow. */
+.sp-shot-name {
+  font-size: 11px;
+  word-break: break-all;
+}

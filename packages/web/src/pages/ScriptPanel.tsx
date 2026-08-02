@@ -7,7 +7,9 @@ import {
   childrenOf,
   editList,
   insertAfter,
+  insideLoop,
   intoBranch,
+  labelsInScope,
   moveAt,
   type Path,
   removeAt,
@@ -69,6 +71,8 @@ const KEY_LABELS: Record<string, string> = {
  * so the run log calls a step what the editor calls it. */
 const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
   { key: true, make: () => ({ type: "call", scriptId: "", args: [], outputs: [] }) },
+  { key: true, make: () => ({ type: "goto", target: "" }) },
+  { key: true, make: () => ({ type: "stop", scope: "script" }) },
   { key: true, make: () => ({ type: "ifVar", name: "", compare: "==", then: [], else: [] }) },
   { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
@@ -347,6 +351,9 @@ function StepRow({
   probe,
   modules,
   variables,
+  labels,
+  inLoop,
+  isModule,
   onRunHere,
   onEditModule,
   editingModule,
@@ -373,6 +380,12 @@ function StepRow({
   modules: Script[];
   /** The enclosing script's declared variables. */
   variables: ScriptVariable[];
+  /** Step names a jump here may aim at — this list and the ones outside it. */
+  labels: string[];
+  /** Whether this row sits inside a 重複, and whether the script is a module:
+   * between them they decide which kinds of 停止 are on offer. */
+  inLoop: boolean;
+  isModule: boolean;
   /** Run only this step, for checking one block without the rest. The step
    * itself travels, so what runs is what is on screen — saved or not. */
   onRunHere: (step: ScriptStep) => void;
@@ -386,6 +399,7 @@ function StepRow({
 }) {
   const set = (patch: Partial<ScriptStep>) => onChange(path, { ...step, ...patch } as ScriptStep);
   const num = (v: string) => Number(v) || 0;
+  const [naming, setNaming] = useState(false);
 
   const coordChip = (x: number, y: number, apply: (r: PickResult) => void) => (
     <button className="sp-pick" onClick={() => pick("point", apply)} title="從畫面拾取">
@@ -464,6 +478,37 @@ function StepRow({
               逾時 <input className="sp-num" value={step.timeoutMs} onChange={(e) => set({ timeoutMs: num(e.target.value) })} />ms
             </>
           )}
+        </>
+      );
+      break;
+    case "goto":
+      body = (
+        <>
+          <Icon name="goto" size={14} />
+          跳到
+          <select value={step.target} onChange={(e) => set({ target: e.target.value })}>
+            <option value="">— 選標記 —</option>
+            {labels.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+          {!labels.length && <span className="sp-warn-inline">還沒有任何標記 — 先幫要跳到的步驟取名</span>}
+        </>
+      );
+      break;
+    case "stop":
+      body = (
+        <>
+          <Icon name="stop" size={13} />
+          停止
+          <select value={step.scope} onChange={(e) => set({ scope: e.target.value as typeof step.scope })}>
+            <option value="script">整支腳本</option>
+            {/* Only offered where they mean something: the save would refuse
+                them anyway, and a menu that offers a mistake is a poor menu. */}
+            {inLoop && <option value="loop">跳出這個迴圈</option>}
+            {inLoop && <option value="iteration">下一輪</option>}
+            {isModule && <option value="module">結束這個模組</option>}
+          </select>
         </>
       );
       break;
@@ -644,6 +689,27 @@ function StepRow({
           }
         />
         <span className="sp-body">
+          {/* A step's name: what the log will call it, what a jump aims at, and
+              what a folded block shows. Empty by default and one click away. */}
+          {naming ? (
+            <input
+              className="sp-label-edit"
+              autoFocus
+              value={step.label ?? ""}
+              placeholder="這一步叫什麼"
+              onChange={(e) => set({ label: e.target.value || undefined })}
+              onBlur={() => setNaming(false)}
+              onKeyDown={(e) => e.key === "Enter" && setNaming(false)}
+            />
+          ) : step.label ? (
+            <button className="sp-label" title="改名稱" onClick={() => setNaming(true)}>
+              <Icon name="bookmark" size={11} /> {step.label}
+            </button>
+          ) : (
+            <button className="sp-label empty" title="幫這一步取個名字(執行紀錄和跳躍都會用到)" onClick={() => setNaming(true)}>
+              <Icon name="bookmark" size={11} />
+            </button>
+          )}
           {body}
           {shut && summary && <span className="sp-summary">內含 {summary} 步</span>}
         </span>
@@ -683,6 +749,9 @@ function StepRow({
               probe={probe}
               modules={modules}
               variables={variables}
+              labels={[...labels, ...childrenOf(step, branch).map((c) => c.label).filter((l): l is string => !!l)]}
+              inLoop={inLoop || step.type === "loop"}
+              isModule={isModule}
               onRunHere={onRunHere}
               onEditModule={onEditModule}
               editingModule={editingModule}
@@ -859,6 +928,9 @@ function ModuleEditor({
             probe={probe}
             modules={scripts.filter((s) => s.isModule && s.id !== scriptId)}
             variables={draft.variables ?? []}
+            labels={labelsInScope(draft.steps, [{ index: i }])}
+            inLoop={false}
+            isModule
             onRunHere={onRunHere}
             onEditModule={() => setError("模組裡的模組請從腳本清單開啟編輯")}
             editingModule={undefined}
@@ -1381,6 +1453,9 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                 clip={clip}
                 modules={scripts.filter((s) => s.isModule && s.id !== draft.id)}
                 variables={draft.variables ?? []}
+                labels={labelsInScope(draft.steps, [{ index: i }])}
+                inLoop={insideLoop(draft.steps, [{ index: i }])}
+                isModule={!!draft.isModule}
                 onRunHere={runHere}
                 onEditModule={(id) => setEditingModule((current) => (current === id ? undefined : id))}
                 editingModule={editingModule}

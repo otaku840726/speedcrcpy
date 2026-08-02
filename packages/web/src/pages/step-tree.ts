@@ -73,3 +73,34 @@ export const insertAfter = (step: ScriptStep) => (list: ScriptStep[], i: number)
   step,
   ...list.slice(i + 1),
 ];
+
+/**
+ * The step names a jump written at `path` is allowed to aim at: every label on
+ * its own list, and on every list enclosing it.
+ *
+ * Not the ones nested inside branches it does not sit in — landing there would
+ * mean entering a branch that was never taken, or a loop body from outside it.
+ */
+export function labelsInScope(steps: ScriptStep[], path: Path): string[] {
+  const found: string[] = [];
+  let list = steps;
+  for (const hop of path) {
+    for (const step of list) if (step.label) found.push(step.label);
+    if (!hop.branch) break;
+    list = childrenOf(list[hop.index] ?? ({} as ScriptStep), hop.branch);
+  }
+  return [...new Set(found)];
+}
+
+/** Is the step at `path` inside a 重複? Decides whether leaving a loop, or
+ * skipping to its next pass, is something it can ask for. */
+export function insideLoop(steps: ScriptStep[], path: Path): boolean {
+  let list = steps;
+  for (const hop of path) {
+    const step = list[hop.index];
+    if (!step || !hop.branch) break;
+    if (step.type === "loop") return true;
+    list = childrenOf(step, hop.branch);
+  }
+  return false;
+}

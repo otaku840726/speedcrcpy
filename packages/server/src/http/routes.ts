@@ -60,7 +60,11 @@ const PickSchema = z
 /** Every step carries an off switch, so it has to be on every member below:
  * zod strips unknown keys rather than rejecting them, so leaving it off one
  * member would drop the flag on save and that step would quietly come back on. */
-const offSwitch = { disabled: z.boolean().optional() };
+const offSwitch = {
+  disabled: z.boolean().optional(),
+  /** A step's name, and what `goto` aims at. */
+  label: z.string().min(1).max(30).optional(),
+};
 /** Variable names are referenced from text as {{name}}, so keep them to
  * something that cannot be confused with the braces around them. */
 const VarName = z.string().min(1).max(30).regex(/^[^{}\s]+$/);
@@ -135,6 +139,8 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       ...offSwitch,
       ...saveSwitch,
     }),
+    z.object({ type: z.literal("goto"), target: z.string().min(1).max(30), ...offSwitch }),
+    z.object({ type: z.literal("stop"), scope: z.enum(["script", "loop", "iteration", "module"]), ...offSwitch }),
     z.object({
       type: z.literal("call"),
       scriptId: z.string().min(1).max(64),
@@ -258,6 +264,57 @@ function callCycle(store: ScriptStore, id: string | undefined, steps: unknown[])
     return undefined;
   };
   return walk(calledIds(steps), ["這支腳本"]);
+}
+
+/**
+ * A jump whose label is not in scope, or a stop that has nothing to stop.
+ *
+ * Both are decided by where the step sits, and both are silent at run time —
+ * the jump would go nowhere and the stop would end more than intended — so
+ * they are worth refusing while the author is still looking at the thing they
+ * just wrote.
+ */
+function badControlFlow(
+  steps: unknown[],
+  labelsInScope: Set<string>,
+  inLoop = false,
+  inModule = false,
+): string | undefined {
+  const list = steps as Record<string, unknown>[];
+  // Every label on this level is reachable from anywhere on it, including from
+  // a step that sits above the labelled one — a jump backwards is the point.
+  const scope = new Set(labelsInScope);
+  for (const step of list) if (typeof step.label === "string") scope.add(step.label);
+
+  for (const step of list) {
+    if (step.type === "goto" && typeof step.target === "string" && !scope.has(step.target)) {
+      return `「跳到標記」找不到標記「${step.target}」— 只能跳到同一層或外層的標記`;
+    }
+    if (step.type === "stop") {
+      if ((step.scope === "loop" || step.scope === "iteration") && !inLoop) {
+        return `「停止」設為${step.scope === "loop" ? "跳出這個迴圈" : "下一輪"},但這一步不在任何迴圈裡`;
+      }
+      if (step.scope === "module" && !inModule) {
+        return "「停止」設為結束這個模組,但這支腳本不是模組";
+      }
+    }
+    const nested = [
+      ...((step.body as unknown[]) ?? []).map((s) => ({ s, loop: true })),
+      ...((step.then as unknown[]) ?? []).map((s) => ({ s, loop: inLoop })),
+      ...((step.else as unknown[]) ?? []).map((s) => ({ s, loop: inLoop })),
+    ];
+    for (const group of [
+      { steps: (step.body as unknown[]) ?? [], loop: true },
+      { steps: (step.then as unknown[]) ?? [], loop: inLoop },
+      { steps: (step.else as unknown[]) ?? [], loop: inLoop },
+    ]) {
+      if (!group.steps.length) continue;
+      const found = badControlFlow(group.steps, scope, group.loop, inModule);
+      if (found) return found;
+    }
+    void nested;
+  }
+  return undefined;
 }
 
 /** Which scripts call this one — for the editor's warning, and for refusing to
@@ -488,6 +545,8 @@ export function registerRoutes(
     if (!body.success) return rejectInvalid(reply, request.body);
     const cycle = callCycle(scriptStore, body.data.id, body.data.steps as unknown[]);
     if (cycle) return reply.code(409).send({ error: `模組會繞回自己:${cycle}` });
+    const flow = badControlFlow(body.data.steps as unknown[], new Set(), false, !!body.data.isModule);
+    if (flow) return reply.code(409).send({ error: flow });
     const saved = scriptStore.save(body.data as never);
     // Editing a script is a fresh intent — in particular, re-enabling one that
     // was stopped should let it be scheduled again.
