@@ -128,6 +128,15 @@ const DRAFT_SYNC_MS = 2000;
  * Module-level so it survives closing the panel, like the clipboard.
  */
 const collapsed = new Map<string, Set<string>>();
+/**
+ * How far down each script was scrolled, kept where the drafts and the fold
+ * state are kept.
+ *
+ * Closing the panel to look at the device is part of editing — the draft
+ * already survives it, and arriving back at the top of a forty-step script to
+ * hunt for where you were undoes most of that.
+ */
+const scrollTops = new Map<string, number>();
 const foldKey = (path: Path) => path.map((p) => `${p.index}${p.branch ?? ""}`).join("/");
 
 // ---- picker ----
@@ -961,6 +970,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   const [fold, setFold] = useState(0);
   /** Edits the debounce is still sitting on, so closing the panel can flush them. */
   const unsent = useRef<{ key: string; draft: Draft } | undefined>(undefined);
+  const scroller = useRef<HTMLDivElement>(null);
   /** Known devices, so a scheduled script can be pointed at several. */
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   /** Mirrors the module-level clipboard; state only so the paste buttons appear
@@ -1095,6 +1105,21 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
   // Closing the panel is not an edit — flush whatever the pause was still
   // holding, so the server copy matches what is on screen.
   useEffect(() => () => void syncDraft(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Put the view back where it was. The steps arrive over a frame or two (the
+  // draft loads, template thumbnails decode), so the position is re-applied
+  // until it sticks rather than set once against a page that is still short.
+  useEffect(() => {
+    const el = scroller.current;
+    const want = draft && scrollTops.get(draft.key);
+    if (!el || !want) return;
+    let tries = 0;
+    const restore = () => {
+      el.scrollTop = want;
+      if (++tries < 8 && Math.abs(el.scrollTop - want) > 2) requestAnimationFrame(restore);
+    };
+    requestAnimationFrame(restore);
+  }, [draft?.key]);
 
   // 已儲存 is an acknowledgement, not a state; the quiet disabled 儲存 button is
   // what says "nothing to save" from then on.
@@ -1239,7 +1264,11 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
       : waitLabel;
 
   return (
-    <div className="script-panel">
+    <div
+      className="script-panel"
+      ref={scroller}
+      onScroll={(e) => draft && scrollTops.set(draft.key, e.currentTarget.scrollTop)}
+    >
       <div className="sp-head">
         <Icon name="robot" size={18} />
         <span style={{ fontWeight: 600 }}>自動化腳本</span>

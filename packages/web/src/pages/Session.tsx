@@ -91,9 +91,14 @@ export function Session({
   const [controlling, setControlling] = useState(true);
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
-  const [scriptsOpen, setScriptsOpen] = useState(false);
-  const [replayOpen, setReplayOpen] = useState(false);
-  const [shotOpen, setShotOpen] = useState(false);
+  /**
+   * One panel at a time. They share a position and stack, so opening a second
+   * one used to leave it hidden behind the first — you had to close the script
+   * panel to discover that the replay had been open all along.
+   */
+  const [panel, setPanel] = useState<"scripts" | "replay" | "shot">();
+  const scriptsOpen = panel === "scripts";
+
   /** Unsaved script edits waiting somewhere. With the panel shut there is
    * nothing else on screen to say so, and the whole point of keeping a draft is
    * that you can leave and come back. */
@@ -516,22 +521,22 @@ export function Session({
                 </button>
                 <button
                   title="截圖(完整解析度)"
-                  onClick={() => setShotOpen(true)}
-                  style={shotOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                  onClick={() => setPanel("shot")}
+                  style={panel === "shot" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
                 >
                   <Icon name="camera" />
                 </button>
                 <button
                   title="回放:這台裝置的縮時"
-                  onClick={() => setReplayOpen((v) => !v)}
-                  style={replayOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                  onClick={() => setPanel((p) => (p === "replay" ? undefined : "replay"))}
+                  style={panel === "replay" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
                 >
                   <Icon name="history" />
                 </button>
                 <button
                   className={!scriptsOpen && hasDrafts ? "has-draft" : undefined}
                   title={hasDrafts ? "自動化腳本(有未儲存的編輯)" : "自動化腳本"}
-                  onClick={() => setScriptsOpen((v) => !v)}
+                  onClick={() => setPanel((p) => (p === "scripts" ? undefined : "scripts"))}
                   style={scriptsOpen ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
                 >
                   <Icon name="robot" />
@@ -584,9 +589,9 @@ export function Session({
             )}
           </>
         )}
-        {shotOpen && <Screenshot serial={serial} name={state.deviceName} onClose={() => setShotOpen(false)} />}
-        {replayOpen && <ReplayPanel serial={serial} onClose={() => setReplayOpen(false)} />}
-        {scriptsOpen && <ScriptPanel serial={serial} onClose={() => setScriptsOpen(false)} />}
+        {panel === "shot" && <Screenshot serial={serial} name={state.deviceName} onClose={() => setPanel(undefined)} />}
+        {panel === "replay" && <ReplayPanel serial={serial} onClose={() => setPanel(undefined)} />}
+        {panel === "scripts" && <ScriptPanel serial={serial} onClose={() => setPanel(undefined)} />}
         {clipboardToast !== undefined && (
           <button
             className="clipboard-toast"
