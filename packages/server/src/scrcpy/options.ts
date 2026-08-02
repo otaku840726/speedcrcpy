@@ -56,7 +56,25 @@ export function makeVideoOptions(config: VideoSessionConfig, forceBaseline: bool
   );
 }
 
-export function makeControlOptions(withAudio = true, powerOffOnClose = false) {
+/**
+ * @param screenOffTimeoutMs Hold the device's screen-off timeout at this while
+ * the instance runs; scrcpy restores the original when it closes.
+ *
+ * Milliseconds, not seconds: scrcpy's *command line* takes seconds and converts,
+ * but this goes straight to the server, which takes the raw value Android's
+ * `screen_off_timeout` setting uses. Passing 86400 meaning "a day" set the
+ * device to 86.4 seconds, and it dozed exactly that long after the last input —
+ * read back off the device, which is the only way that was ever going to
+ * surface.
+ *
+ * Only a viewer session asks for it. Powering the panel off does not stop
+ * Android's inactivity timer, so a device left alone dozes — and a dozing
+ * device composes nothing, which is why the mirror and even `screencap` come
+ * back pure black. Two instances must never both set it: the second would save
+ * the first's raised value as "the original" and write that back for good, so
+ * the always-on keeper deliberately leaves it alone.
+ */
+export function makeControlOptions(withAudio = true, powerOffOnClose = false, screenOffTimeoutMs?: number) {
   return new AdbScrcpyOptionsLatest(
     {
       scid: ScrcpyInstanceId.random(),
@@ -78,6 +96,8 @@ export function makeControlOptions(withAudio = true, powerOffOnClose = false) {
       // session and the 24/7 screen-off keeper, so devices stay reachable even
       // when nobody is watching.
       stayAwake: true,
+      // Only set when asked; `undefined` leaves the device's own setting alone.
+      screenOffTimeout: screenOffTimeoutMs,
       // With video off, the 64-byte device-name header would land on the
       // audio socket and be misparsed as the audio codec id — don't send it.
       sendDeviceMeta: false,

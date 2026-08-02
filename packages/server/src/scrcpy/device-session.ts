@@ -5,6 +5,15 @@ import { AndroidScreenPowerMode, type ScrcpyControlMessageWriter, type ScrcpyMed
 import { makeControlOptions } from "./options.js";
 import { pushServer, removeServer } from "./server-binary.js";
 
+/** One-shot shell command, trimmed. scrcpy's control channel has no message for
+ * asking about power state, so this goes the plain adb way. */
+async function sh(adb: Adb, command: string): Promise<string> {
+  const shell = adb.subprocess.shellProtocol;
+  if (!shell?.isSupported) throw new Error("shell protocol unavailable");
+  const { stdout } = await shell.spawnWait(command);
+  return new TextDecoder().decode(stdout);
+}
+
 // The device can wake itself (notifications, always-on display), so re-assert
 // the off state on a slow timer rather than trusting a single command.
 const SCREEN_OFF_REASSERT_MS = 3_000;
@@ -25,7 +34,11 @@ export class DeviceSession {
   private screenOffTimer: NodeJS.Timeout | undefined;
   private powerOffOnClose = false;
 
-  private constructor(private readonly client: AdbScrcpyClient<AdbScrcpyOptionsLatest<false>>) {}
+  private constructor(
+    private readonly client: AdbScrcpyClient<AdbScrcpyOptionsLatest<false>>,
+    /** Kept for the shell calls scrcpy's control channel has no message for. */
+    private readonly adb: Adb,
+  ) {}
 
   get controller(): ScrcpyControlMessageWriter {
     const controller = this.client.controller;
@@ -35,7 +48,15 @@ export class DeviceSession {
 
   static async start(
     adb: Adb,
-    options: { audio?: boolean; powerOffOnClose?: boolean } = {},
+    options: {
+      audio?: boolean;
+      powerOffOnClose?: boolean;
+      screenOffTimeoutMs?: number;
+      /** Wake a device that is already dozing. For a viewer session, which
+       * also holds the screen-off timeout so it stays awake; not for the idle
+       * keeper, which would only wake it to watch it doze again. */
+      wakeOnStart?: boolean;
+    } = {},
   ): Promise<DeviceSession> {
     const withAudio = options.audio ?? true;
     const powerOffOnClose = options.powerOffOnClose ?? false;
@@ -43,13 +64,22 @@ export class DeviceSession {
     const serverPath = await pushServer(adb);
     let client;
     try {
-      client = await AdbScrcpyClient.start(adb, serverPath, makeControlOptions(withAudio, powerOffOnClose));
+      client = await AdbScrcpyClient.start(
+        adb,
+        serverPath,
+        makeControlOptions(withAudio, powerOffOnClose, options.screenOffTimeoutMs),
+      );
     } catch (error) {
       void removeServer(adb, serverPath);
       throw error;
     }
-    const session = new DeviceSession(client);
+    const session = new DeviceSession(client, adb);
     session.powerOffOnClose = powerOffOnClose;
+    // Mirroring does not keep Android awake on its own, so a device left alone
+    // is often already dozing by the time someone opens it — and a dozing
+    // device composes nothing, so the first frames are stale and everything
+    // after them is black.
+    if (options.wakeOnStart) await session.wakeIfDozing();
 
     if (withAudio) {
       void session.consumeAudio();
@@ -86,6 +116,28 @@ export class DeviceSession {
    * powers down the panel. Re-asserted on a timer since the device can wake
    * itself; restored to Normal when turned off or the session ends.
    */
+  /**
+   * Bring the device out of doze before darkening the panel.
+   *
+   * Powering the panel off keeps the system awake only until its own
+   * inactivity timer runs out; after that Android dozes, and a dozing device
+   * composes nothing — the mirror goes black a moment after connecting, and so
+   * does `screencap`. Measured on a real device: dozing gave a pure black
+   * frame, and a single wake key brought it back. Pressing anything (which is
+   * how this was noticed — the 返回 button "fixed" it) does the same thing by
+   * accident. `screen_off_timeout` keeps it awake from then on.
+   */
+  async wakeIfDozing(): Promise<void> {
+    try {
+      const power = await sh(this.adb, "dumpsys power | grep -m1 mWakefulness=");
+      if (/mWakefulness=Awake/.test(power)) return;
+      console.log(`[screen] 裝置在休眠(${power.trim()}),先喚醒再關面板`);
+      await sh(this.adb, "input keyevent KEYCODE_WAKEUP");
+    } catch {
+      /* worst case the panel goes dark on a dozing device, as it did before */
+    }
+  }
+
   setScreenOff(off: boolean): void {
     this.screenOff = off;
     if (this.screenOffTimer) {
@@ -93,7 +145,9 @@ export class DeviceSession {
       this.screenOffTimer = undefined;
     }
     if (off) {
-      void this.applyScreenPower(AndroidScreenPowerMode.Off);
+      // Wake first: darkening a dozing device leaves it dozing, and nothing to
+      // watch. The panel goes off immediately after, so nobody sees it light up.
+      void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
       this.screenOffTimer = setInterval(() => {
         void this.applyScreenPower(AndroidScreenPowerMode.Off);
       }, SCREEN_OFF_REASSERT_MS);

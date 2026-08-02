@@ -17,6 +17,9 @@ import type { DisplayManager } from "./display-override.js";
 import { VideoPipeline } from "./video-pipeline.js";
 
 const RESET_VIDEO_DEBOUNCE_MS = 1_000;
+/** A day, in the milliseconds Android's setting uses. Long enough that no
+ * viewing session reaches it, and restored by scrcpy on close either way. */
+const SESSION_SCREEN_OFF_TIMEOUT_MS = 86_400_000;
 const SWITCH_TIMEOUT_MS = 8_000;
 
 export interface SessionViewer {
@@ -427,7 +430,16 @@ export class SessionManager {
 
     // When screen-off is the standing policy, keep it off after the session
     // ends / the server dies too (scrcpy powers off on close).
-    const device = await DeviceSession.start(adb, { powerOffOnClose: this.screenOffDefault });
+    const device = await DeviceSession.start(adb, {
+      powerOffOnClose: this.screenOffDefault,
+      // Hold the device's screen-off timeout for as long as someone is
+      // mirroring. Without it, powering the panel off leaves Android's own
+      // inactivity timer running, the device dozes, and a dozing device
+      // composes nothing — the picture goes black seconds after connecting.
+      // scrcpy restores the original value when this instance closes.
+      screenOffTimeoutMs: SESSION_SCREEN_OFF_TIMEOUT_MS,
+      wakeOnStart: true,
+    });
 
     // Restore the device's last quality choice; auto mode starts from the rung
     // nearest the stored settings (it re-adapts anyway), manual pins it exactly.
