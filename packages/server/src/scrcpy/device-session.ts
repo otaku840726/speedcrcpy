@@ -18,6 +18,9 @@ async function sh(adb: Adb, command: string): Promise<string> {
 // the off state on a slow timer rather than trusting a single command.
 const SCREEN_OFF_REASSERT_MS = 3_000;
 
+/** Re-asserts between power-state checks: one `dumpsys power` every 12 s. */
+const DOZE_CHECK_EVERY = 4;
+
 /**
  * The persistent scrcpy instance owning control (input), audio, and clipboard.
  * Runs `video: false` so quality switches never touch it.
@@ -148,8 +151,18 @@ export class DeviceSession {
       // Wake first: darkening a dozing device leaves it dozing, and nothing to
       // watch. The panel goes off immediately after, so nobody sees it light up.
       void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
+      let ticks = 0;
       this.screenOffTimer = setInterval(() => {
-        void this.applyScreenPower(AndroidScreenPowerMode.Off);
+        // Re-asserting off does nothing for a device that has dozed: it stops
+        // composing, so the mirror is black and another off command changes
+        // nothing. Nothing here used to notice, which is why the picture stayed
+        // black until someone pressed 返回. Check the power state every few
+        // ticks — cheap enough at this spacing, and it heals itself.
+        if (++ticks % DOZE_CHECK_EVERY === 0) {
+          void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
+        } else {
+          void this.applyScreenPower(AndroidScreenPowerMode.Off);
+        }
       }, SCREEN_OFF_REASSERT_MS);
     } else {
       void this.applyScreenPower(AndroidScreenPowerMode.Normal);
@@ -226,11 +239,18 @@ export class DeviceSession {
 
   private async consumeOutput(): Promise<void> {
     const reader = this.client.output.getReader();
+    // The screen-off re-assert makes the server say "Device display turned off"
+    // every 3 seconds for as long as the instance lives. Saying it once is
+    // information; saying it 1200 times an hour buries everything else.
+    let previous = "";
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (value.trim()) console.log(`[scrcpy:control] ${value.trim()}`);
+        const line = value.trim();
+        if (!line || line === previous) continue;
+        previous = line;
+        console.log(`[scrcpy:control] ${line}`);
       }
     } catch {
       // Closed with the session.

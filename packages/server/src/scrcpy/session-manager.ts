@@ -378,8 +378,10 @@ export class SessionManager {
     private readonly sessionLingerMs = 60_000,
     /** Default codec new sessions encode with ("h264" | "h265"). */
     private readonly videoCodec: VideoCodec = "h264",
-    /** Notified when a device is taken by / released from a viewer session. */
-    private readonly onSessionActive?: (serial: string, active: boolean) => void,
+    /** Notified when a device is taken by / released from a viewer session.
+     * Taking one is awaited: the keeper has to be off the device before we
+     * start our own instance on it. */
+    private readonly onSessionActive?: (serial: string, active: boolean) => void | Promise<void>,
     /** Re-applies any persisted display-resolution override before capture starts. */
     private readonly displayManager?: DisplayManager,
   ) {}
@@ -388,10 +390,7 @@ export class SessionManager {
   acquire(serial: string): Promise<ManagedSession> {
     let pending = this.sessions.get(serial);
     if (!pending) {
-      // Release the idle screen-off keeper before starting our own control
-      // instance, so the two don't fight over the panel.
-      this.onSessionActive?.(serial, true);
-      pending = this.create(serial);
+      pending = this.createAfterKeeper(serial);
       this.sessions.set(serial, pending);
       pending.catch(() => {
         this.sessions.delete(serial);
@@ -399,6 +398,20 @@ export class SessionManager {
       });
     }
     return pending;
+  }
+
+  /**
+   * Let the idle screen-off keeper finish leaving before touching the device.
+   *
+   * Both are scrcpy instances with opinions about the panel, and the keeper's
+   * parting act — scrcpy's `--power-off-on-close` cleanup — presses POWER if it
+   * finds the screen on. Starting ours in parallel meant our wake key could land
+   * first, so the cleanup saw a lit screen and put the phone to sleep: a picture
+   * for a moment, then black. Handing over in order costs a beat on entry.
+   */
+  private async createAfterKeeper(serial: string): Promise<ManagedSession> {
+    await this.onSessionActive?.(serial, true);
+    return this.create(serial);
   }
 
   /** Active viewer connections across all running sessions (empty ones omitted). */

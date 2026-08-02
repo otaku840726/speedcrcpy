@@ -28,12 +28,20 @@ export class ScreenManager {
     this.sync(this.adbManager.deviceInfos());
   }
 
-  /** Called by SessionManager: a viewer session took/released a device. */
-  setSessionActive(serial: string, active: boolean): void {
+  /**
+   * Called by SessionManager: a viewer session took/released a device.
+   *
+   * Taking one is awaited. The keeper runs with `--power-off-on-close`, and
+   * scrcpy's device-side cleanup presses POWER on the way out if it finds the
+   * screen on — so a keeper still shutting down while the new session sends its
+   * wake key put the device to sleep a second after the mirror opened. The two
+   * must not be talking to the same phone at once.
+   */
+  async setSessionActive(serial: string, active: boolean): Promise<void> {
     if (!this.enabled) return;
     if (active) {
       this.sessionActive.add(serial);
-      void this.stopKeeper(serial);
+      await this.stopKeeper(serial);
     } else {
       this.sessionActive.delete(serial);
       // Re-assert on the next sync; do it now if still connected.
@@ -59,25 +67,37 @@ export class ScreenManager {
     }
   }
 
-  private async startKeeper(serial: string): Promise<void> {
-    const existing = this.keepers.get(serial);
-    if (existing) return; // already running or starting
+  private startKeeper(serial: string): void {
+    if (this.keepers.get(serial)) return; // already running or starting
 
-    const state: KeeperState = { starting: true, session: undefined };
+    const state: KeeperState = { cancelled: false, session: undefined, ready: Promise.resolve() };
     this.keepers.set(serial, state);
+    state.ready = this.openKeeper(serial, state);
+  }
+
+  private async openKeeper(serial: string, state: KeeperState): Promise<void> {
     try {
       const adb = await this.adbManager.getAdb(serial);
       // Re-check: the device may have gained a session or dropped while we
       // were opening the transport.
-      if (this.sessionActive.has(serial) || this.keepers.get(serial) !== state) {
+      if (state.cancelled || this.sessionActive.has(serial) || this.keepers.get(serial) !== state) {
         this.keepers.delete(serial);
         return;
       }
       // powerOffOnClose: keep the screen off even if this keeper dies uncleanly
       // (container killed, device dropped) instead of the panel being restored.
       const session = await DeviceSession.start(adb, { audio: false, powerOffOnClose: true });
+      // Starting one takes a second or two, and a session can claim the device
+      // in the middle of that. Without this the keeper would finish starting
+      // after being told to stop and then run unowned for the rest of the
+      // session, re-asserting screen-off every 3 seconds against a viewer who
+      // had just turned it off.
+      if (state.cancelled || this.sessionActive.has(serial)) {
+        await session.close(false).catch(() => {});
+        this.keepers.delete(serial);
+        return;
+      }
       state.session = session;
-      state.starting = false;
       session.setScreenOff(true);
       session.onExit(() => {
         if (this.keepers.get(serial) === state) this.keepers.delete(serial);
@@ -89,10 +109,14 @@ export class ScreenManager {
     }
   }
 
+  /** Resolves once the keeper is really gone from the device, not merely
+   * un-listed here — the caller is about to start its own instance. */
   private async stopKeeper(serial: string): Promise<void> {
     const state = this.keepers.get(serial);
     if (!state) return;
+    state.cancelled = true;
     this.keepers.delete(serial);
+    await state.ready.catch(() => {});
     // Don't restore the panel: the keeper only stops because a session is
     // taking over screen-off, or the device disconnected (restore is a no-op).
     // Keeping it off through the handover avoids an on/off flicker.
@@ -101,6 +125,9 @@ export class ScreenManager {
 }
 
 interface KeeperState {
-  starting: boolean;
+  /** Told to stop, possibly before it finished starting. */
+  cancelled: boolean;
   session: DeviceSession | undefined;
+  /** Settles when the start attempt is over, either way. */
+  ready: Promise<void>;
 }
