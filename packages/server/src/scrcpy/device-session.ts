@@ -14,12 +14,23 @@ async function sh(adb: Adb, command: string): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
-// The device can wake itself (notifications, always-on display), so re-assert
-// the off state on a slow timer rather than trusting a single command.
-const SCREEN_OFF_REASSERT_MS = 3_000;
-
-/** Re-asserts between power-state checks: one `dumpsys power` every 12 s. */
-const DOZE_CHECK_EVERY = 4;
+/**
+ * The device can wake itself (notifications, always-on display), so the off
+ * state is re-asserted rather than trusted to a single command — quickly at
+ * first, then rarely.
+ *
+ * Asking the device whether the panel is already off, and skipping the command
+ * when it is, would cost more than it saves: the command is a few bytes on a
+ * socket that is already open, while reading the state means a shell process
+ * and a full `dumpsys`. Cadence is the lever, not a condition. The tail-off
+ * trades a panel that could stay lit for up to half a minute after something
+ * turned it on — for a device that is dark precisely because nobody is looking
+ * at it.
+ */
+const SCREEN_OFF_FAST_MS = 3_000;
+const SCREEN_OFF_SLOW_MS = 30_000;
+/** How long the fast cadence lasts after turning the panel off. */
+const SCREEN_OFF_FAST_FOR_MS = 30_000;
 
 /**
  * The persistent scrcpy instance owning control (input), audio, and clipboard.
@@ -144,26 +155,28 @@ export class DeviceSession {
   setScreenOff(off: boolean): void {
     this.screenOff = off;
     if (this.screenOffTimer) {
-      clearInterval(this.screenOffTimer);
+      clearTimeout(this.screenOffTimer);
       this.screenOffTimer = undefined;
     }
     if (off) {
       // Wake first: darkening a dozing device leaves it dozing, and nothing to
       // watch. The panel goes off immediately after, so nobody sees it light up.
       void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
-      let ticks = 0;
-      this.screenOffTimer = setInterval(() => {
+      const startedAt = Date.now();
+      const reassert = () => {
+        if (this.closed) return;
+        const fast = Date.now() - startedAt < SCREEN_OFF_FAST_FOR_MS;
         // Re-asserting off does nothing for a device that has dozed: it stops
         // composing, so the mirror is black and another off command changes
         // nothing. Nothing here used to notice, which is why the picture stayed
-        // black until someone pressed 返回. Check the power state every few
-        // ticks — cheap enough at this spacing, and it heals itself.
-        if (++ticks % DOZE_CHECK_EVERY === 0) {
-          void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
-        } else {
-          void this.applyScreenPower(AndroidScreenPowerMode.Off);
-        }
-      }, SCREEN_OFF_REASSERT_MS);
+        // black until someone pressed 返回. The check that catches it is a
+        // `dumpsys`, so it rides the slow ticks only — where one shell call per
+        // half-minute is affordable.
+        if (fast) void this.applyScreenPower(AndroidScreenPowerMode.Off);
+        else void this.wakeIfDozing().then(() => this.applyScreenPower(AndroidScreenPowerMode.Off));
+        this.screenOffTimer = setTimeout(reassert, fast ? SCREEN_OFF_FAST_MS : SCREEN_OFF_SLOW_MS);
+      };
+      this.screenOffTimer = setTimeout(reassert, SCREEN_OFF_FAST_MS);
     } else {
       void this.applyScreenPower(AndroidScreenPowerMode.Normal);
     }
@@ -181,7 +194,7 @@ export class DeviceSession {
    */
   async close(restore = true): Promise<void> {
     this.closed = true;
-    if (this.screenOffTimer) clearInterval(this.screenOffTimer);
+    if (this.screenOffTimer) clearTimeout(this.screenOffTimer);
     // With powerOffOnClose, scrcpy's cleanup powers the screen off on close —
     // don't restore it (that's the point: stay off after disconnect).
     if (restore && this.screenOff && !this.powerOffOnClose) {
