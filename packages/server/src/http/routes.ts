@@ -172,24 +172,21 @@ const TriggerSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("persistent") }),
   z.object({ type: z.literal("daily"), time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }),
 ]);
-/** Where a step sits in the tree — the same address the editor uses. */
-const RunBody = z.object({
-  path: z
-    .array(z.object({ index: z.coerce.number().int().min(0).max(200), branch: z.enum(["body", "then", "else"]).optional() }))
-    .max(20)
-    .optional(),
+/**
+ * One step, sent whole rather than pointed at.
+ *
+ * The editor used to send the step's *position* and the server looked it up in
+ * the saved script — so a script with unsaved edits ran the old settings, and
+ * one whose steps had been added or moved ran a different step entirely, with
+ * no sign anything was wrong. What is on screen is what runs.
+ */
+const RunStepBody = z.object({
+  step: StepSchema,
+  /** The script's declared variables, so an input's default still applies when
+   * a step is tried on its own. */
+  variables: z.array(z.lazy(() => VariableSchema)).max(30).optional(),
+  name: z.string().max(60).optional(),
 });
-
-function stepAt(steps: unknown[], path: { index: number; branch?: string }[]): ScriptStep | undefined {
-  let list = steps as Record<string, unknown>[];
-  let step: Record<string, unknown> | undefined;
-  for (const hop of path) {
-    step = list[hop.index];
-    if (!step) return undefined;
-    if (hop.branch) list = (step[hop.branch] ?? []) as Record<string, unknown>[];
-  }
-  return step as ScriptStep | undefined;
-}
 
 const VariableSchema = z.object({
   name: VarName,
@@ -612,21 +609,6 @@ export function registerRoutes(
     const script = scriptStore.get(request.params.id);
     if (!script) return reply.code(404).send({ error: "not_found" });
 
-    // A path means "just this block" — a debugging run, so it goes straight to
-    // the engine rather than through the scheduler: nothing about it should
-    // outrank, queue behind, or preempt scheduled work. Busy means busy.
-    const only = RunBody.safeParse(request.body ?? {});
-    if (only.success && only.data.path?.length) {
-      const step = stepAt(script.steps, only.data.path);
-      if (!step) return reply.code(400).send({ error: "bad_request" });
-      try {
-        await scriptEngine.start({ ...script, steps: [step] }, request.params.serial);
-      } catch (error) {
-        return reply.code(409).send({ error: error instanceof Error ? error.message : "run_failed" });
-      }
-      return { ok: true };
-    }
-
     scheduler.requestRun(script, request.params.serial);
     return { ok: true };
   });
@@ -697,6 +679,36 @@ export function registerRoutes(
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : "match_failed" });
     }
+  });
+
+  /**
+   * Run a single step on the device being viewed, exactly as the editor has it.
+   *
+   * Straight to the engine rather than through the scheduler: this is someone
+   * checking one block, and it should not outrank, queue behind, or preempt
+   * scheduled work. A device already running something says so.
+   */
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/run-step", async (request, reply) => {
+    const body = RunStepBody.safeParse(request.body);
+    if (!body.success) return rejectInvalid(reply, request.body);
+    try {
+      await scriptEngine.start(
+        {
+          id: "step",
+          name: body.data.name ?? "單步測試",
+          steps: [body.data.step as ScriptStep],
+          variables: body.data.variables,
+          devices: [],
+          trigger: { type: "manual" },
+          priority: 20,
+          enabled: true,
+        },
+        request.params.serial,
+      );
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "run_failed" });
+    }
+    return { ok: true };
   });
 
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/script/stop", async (request) => {

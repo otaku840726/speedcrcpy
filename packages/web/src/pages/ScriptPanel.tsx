@@ -373,8 +373,9 @@ function StepRow({
   modules: Script[];
   /** The enclosing script's declared variables. */
   variables: ScriptVariable[];
-  /** Run only this step, for checking one block without the rest. */
-  onRunHere: (path: Path) => void;
+  /** Run only this step, for checking one block without the rest. The step
+   * itself travels, so what runs is what is on screen — saved or not. */
+  onRunHere: (step: ScriptStep) => void;
   onEditModule: (scriptId: string) => void;
   editingModule: string | undefined;
   /** The called module's own editor, rendered inside this row. */
@@ -647,7 +648,7 @@ function StepRow({
           {shut && summary && <span className="sp-summary">內含 {summary} 步</span>}
         </span>
         <span className="sp-actions">
-          <button onClick={() => onRunHere(path)} title="只執行這一段"><Icon name="play" size={12} /></button>
+          <button onClick={() => onRunHere(step)} title="只執行這一段(用畫面上的內容,不必先儲存)"><Icon name="play" size={12} /></button>
           <button onClick={() => onMove(path, -1)} title="上移"><Icon name="arrowUp" size={12} /></button>
           <button onClick={() => onMove(path, 1)} title="下移"><Icon name="arrowDown" size={12} /></button>
           <button onClick={() => onCopy(step)} title="複製(含底下的子步驟)"><Icon name="copy" size={12} /></button>
@@ -763,7 +764,7 @@ function ModuleEditor({
   probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
   clip: ScriptStep | undefined;
   onCopy: (step: ScriptStep) => void;
-  onRunHere: (path: Path) => void;
+  onRunHere: (step: ScriptStep) => void;
 }) {
   const stored = scripts.find((s) => s.id === scriptId);
   const [draft, setDraft] = useState<Draft | undefined>(() => localDrafts.get(scriptId) ?? (stored ? asDraft(stored) : undefined));
@@ -1057,14 +1058,20 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
     editSteps(fn);
   };
 
-  /** Run a single block on the device being viewed. Straight to the engine —
-   * a debugging run should not queue behind or preempt scheduled work. */
-  const runHere = (path: Path) => {
-    if (!draft?.id) return setError("先儲存腳本才能執行其中一段");
+  /**
+   * Run a single block on the device being viewed.
+   *
+   * The step is sent whole, so it runs exactly as it looks right now — an
+   * unsaved script, or an unsaved change to a saved one, is the normal case
+   * for trying one block out. Straight to the engine rather than through the
+   * scheduler: a check like this should not outrank or queue behind scheduled
+   * work.
+   */
+  const runHere = (step: ScriptStep) => {
     setError(undefined);
-    void api(`/api/devices/${encodeURIComponent(serial)}/scripts/${draft.id}/run`, {
+    void api(`/api/devices/${encodeURIComponent(serial)}/run-step`, {
       method: "POST",
-      body: JSON.stringify({ path }),
+      body: JSON.stringify({ step, variables: draft?.variables, name: draft?.name }),
     }).catch((e: unknown) => setError(e instanceof Error ? e.message : "執行失敗"));
   };
 

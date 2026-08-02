@@ -221,7 +221,7 @@ export class ScriptEngine {
 
   /** Start a script. Rejects if the device already has one running. */
   async start(script: Script, serial: string): Promise<void> {
-    if (this.runs.has(serial)) throw new Error("script already running on this device");
+    if (this.runs.has(serial)) throw new Error("這台裝置正在執行腳本,先停止才能單獨執行一段");
 
     const adb = await this.adbManager.getAdb(serial);
     const { width, height } = await this.frameSize(adb);
