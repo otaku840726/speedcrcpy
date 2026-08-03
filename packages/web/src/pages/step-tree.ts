@@ -75,6 +75,17 @@ export const insertAfter = (step: ScriptStep) => (list: ScriptStep[], i: number)
 ];
 
 /**
+ * Insert above the row `path` points at — the gap between two steps, and the
+ * one above the first, which nothing else can reach: appending puts a step at
+ * the end of the list, and pasting puts it under a row.
+ */
+export const insertBefore = (step: ScriptStep) => (list: ScriptStep[], i: number) => [
+  ...list.slice(0, i),
+  step,
+  ...list.slice(i),
+];
+
+/**
  * The step names a jump written at `path` is allowed to aim at: every label on
  * its own list, and on every list enclosing it.
  *

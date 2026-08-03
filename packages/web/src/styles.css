@@ -1055,6 +1055,71 @@ option {
   padding: 4px 9px;
   border-style: dashed;
 }
+/* The gap above a step, as a place to put one. Quiet until you go near it —
+   there is one of these between every pair of rows, and a 45-step script would
+   be unreadable if they all shouted.
+   The negative margins swallow .sp-steps' own 5px gap on both sides, so a strip
+   between two rows costs 5px of height rather than 24px. Across a long script
+   that difference is a screenful. */
+.sp-insert-wrap {
+  margin: -5px 0;
+  position: relative;
+  z-index: 1;
+}
+.sp-insert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 10px;
+  opacity: 0.3;
+  transition: opacity 0.12s;
+}
+.sp-insert::before,
+.sp-insert::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.sp-insert:hover,
+.sp-insert:focus-within,
+.sp-insert-wrap.open .sp-insert {
+  opacity: 1;
+}
+.sp-insert-wrap.open .sp-insert::before,
+.sp-insert-wrap.open .sp-insert::after {
+  background: var(--accent);
+}
+.sp-insert-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Taller than the strip it sits in: 14px is not a touch target, and this is a
+     panel people use from a phone. It overlaps the gaps either side, which is
+     what makes it hittable without pushing the rows apart. */
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  color: var(--text-dim);
+  /* Opaque: it overhangs the rows either side. */
+  background: var(--panel);
+}
+.sp-insert-btn svg {
+  transition: transform 0.12s;
+}
+.sp-insert-wrap.open .sp-insert-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* The plus becomes the cross that closes it. */
+.sp-insert-wrap.open .sp-insert-btn svg {
+  transform: rotate(45deg);
+}
+/* Open, it is a panel rather than a hairline — give the chips room to breathe
+   without the collapsed strips paying for it. */
+.sp-insert-wrap.open {
+  margin: 0 0 4px;
+}
 .sp-palette {
   display: flex;
   flex-wrap: wrap;

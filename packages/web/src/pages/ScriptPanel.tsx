@@ -1,5 +1,5 @@
 import { type DeviceInfo, MAX_TEMPLATE_BASE64, PRIORITY_LABELS, SCRIPT_STEP_LABELS, type Script, type ScriptFilter, type ScriptKey, type ScriptPick, type ScriptRegion, type ScriptStatus, type ScriptStep, type ScriptTemplate, type ScriptTrigger, type ScriptVariable } from "@speedcrcpy/shared";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Icon } from "../core/icons";
 import {
@@ -7,6 +7,7 @@ import {
   childrenOf,
   editList,
   insertAfter,
+  insertBefore,
   insideLoop,
   intoBranch,
   labelsInScope,
@@ -352,6 +353,7 @@ function StepRow({
   onRemove,
   onMove,
   onAdd,
+  onInsert,
   onCopy,
   onCut,
   onPaste,
@@ -376,6 +378,8 @@ function StepRow({
   onRemove: (path: Path) => void;
   onMove: (path: Path, dir: -1 | 1) => void;
   onAdd: (path: Path, branch: "body" | "then" | "else", step: ScriptStep) => void;
+  /** Put a step in the gap above the row at `path`. */
+  onInsert: (path: Path, step: ScriptStep) => void;
   onCopy: (step: ScriptStep) => void;
   onCut: (path: Path, step: ScriptStep) => void;
   /** Paste the clipboard directly below this row. */
@@ -742,14 +746,16 @@ function StepRow({
         <div key={branch} className={`sp-branch sp-branch-${branch}`}>
           {branches.length > 1 && <div className="sp-branch-label">{branch === "then" ? "成立" : "否則"}</div>}
           {childrenOf(step, branch).map((child, i) => (
+            <Fragment key={i}>
+            <InsertPoint clip={clip} onInsert={(s) => onInsert([...intoBranch(path, branch), { index: i }], s)} />
             <StepRow
-              key={i}
               step={child}
               path={[...intoBranch(path, branch), { index: i }]}
               onChange={onChange}
               onRemove={onRemove}
               onMove={onMove}
               onAdd={onAdd}
+              onInsert={onInsert}
               onCopy={onCopy}
               onCut={onCut}
               onPaste={onPaste}
@@ -768,6 +774,7 @@ function StepRow({
               scriptKey={scriptKey}
               onFold={onFold}
             />
+            </Fragment>
           ))}
           <AddMenu onAdd={(s) => onAdd(path, branch, s)} clip={clip} />
         </div>
@@ -776,6 +783,27 @@ function StepRow({
   );
 }
 
+/** Every kind of step, plus whatever is on the clipboard. Shared so the two
+ *  ways in — append at the end, insert between two rows — offer the same list. */
+function StepPalette({ onPick, clip }: { onPick: (step: ScriptStep) => void; clip: ScriptStep | undefined }) {
+  return (
+    <div className="sp-palette">
+      {clip && (
+        <button className="sp-chip paste" onClick={() => onPick(structuredClone(clip))}>
+          <Icon name="clipboard" size={12} /> 貼上「{SCRIPT_STEP_LABELS[clip.type]}」
+        </button>
+      )}
+      {NEW_STEPS.map((s) => (
+        <button key={s.make().type} className={s.key ? "sp-chip key" : "sp-chip"} onClick={() => onPick(s.make())}>
+          {SCRIPT_STEP_LABELS[s.make().type]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Appends to the end of this list — the only way into a branch that has no
+ *  rows yet, since an insert point needs a row to sit above. */
 function AddMenu({ onAdd, clip }: { onAdd: (step: ScriptStep) => void; clip: ScriptStep | undefined }) {
   const [open, setOpen] = useState(false);
   return (
@@ -784,33 +812,46 @@ function AddMenu({ onAdd, clip }: { onAdd: (step: ScriptStep) => void; clip: Scr
         <Icon name="plus" size={12} /> 新增步驟
       </button>
       {open && (
-        <div className="sp-palette">
-          {/* Appends to the end of this list — the only way into a branch that
-              has no rows yet, since the per-row 貼上 needs a row to sit under. */}
-          {clip && (
-            <button
-              className="sp-chip paste"
-              onClick={() => {
-                onAdd(structuredClone(clip));
-                setOpen(false);
-              }}
-            >
-              <Icon name="clipboard" size={12} /> 貼上「{SCRIPT_STEP_LABELS[clip.type]}」
-            </button>
-          )}
-          {NEW_STEPS.map((s) => (
-            <button
-              key={s.make().type}
-              className={s.key ? "sp-chip key" : "sp-chip"}
-              onClick={() => {
-                onAdd(s.make());
-                setOpen(false);
-              }}
-            >
-              {SCRIPT_STEP_LABELS[s.make().type]}
-            </button>
-          ))}
-        </div>
+        <StepPalette
+          clip={clip}
+          onPick={(step) => {
+            onAdd(step);
+            setOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The gap above a step, as a place to put one.
+ *
+ * Adding a step used to mean appending to the end of the list and then walking
+ * it up one press at a time — unusable on a script of any length, which is
+ * exactly where you most want to insert something. Sitting between the rows,
+ * this needs no row to anchor to and no direction to remember: the step lands
+ * where the line is.
+ */
+function InsertPoint({ onInsert, clip }: { onInsert: (step: ScriptStep) => void; clip: ScriptStep | undefined }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={open ? "sp-insert-wrap open" : "sp-insert-wrap"}>
+      <div className="sp-insert">
+        {/* The plus turns into a cross by rotating, so opening and closing is
+            one control rather than two icons. */}
+        <button className="sp-insert-btn" title="在這裡插入步驟" onClick={() => setOpen((v) => !v)}>
+          <Icon name="plus" size={12} />
+        </button>
+      </div>
+      {open && (
+        <StepPalette
+          clip={clip}
+          onPick={(step) => {
+            onInsert(step);
+            setOpen(false);
+          }}
+        />
       )}
     </div>
   );
@@ -918,14 +959,16 @@ function ModuleEditor({
       />
       <div className="sp-steps" data-fold={fold}>
         {draft.steps.map((step, i) => (
+          <Fragment key={i}>
+          <InsertPoint clip={clip} onInsert={(s) => editSteps((prev) => editList(prev, [{ index: i }], insertBefore(s)))} />
           <StepRow
-            key={i}
             step={step}
             path={[{ index: i }]}
             onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
             onRemove={(p) => editSteps((s) => editList(s, p, removeAt()))}
             onMove={(p, dir) => editSteps((s) => editList(s, p, moveAt(dir)))}
             onAdd={(p, branch, next) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(next)))}
+            onInsert={(p, next) => editSteps((s) => editList(s, p, insertBefore(next)))}
             onCopy={onCopy}
             onCut={(p, cutStep) => {
               onCopy(cutStep);
@@ -947,6 +990,7 @@ function ModuleEditor({
             scriptKey={scriptId}
             onFold={() => setFold((n) => n + 1)}
           />
+          </Fragment>
         ))}
         <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} clip={clip} />
       </div>
@@ -1465,14 +1509,16 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
 
           <div className="sp-steps">
             {draft.steps.map((step, i) => (
+              <Fragment key={i}>
+              <InsertPoint clip={clip} onInsert={(s) => restructure((prev) => editList(prev, [{ index: i }], insertBefore(s)))} />
               <StepRow
-                key={i}
                 step={step}
                 path={[{ index: i }]}
                 onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
                 onRemove={(p) => restructure((s) => editList(s, p, removeAt()))}
                 onMove={(p, dir) => restructure((s) => editList(s, p, moveAt(dir)))}
                 onAdd={(p, branch, step) => editSteps((s) => editList(s, intoBranch(p, branch), appendTo(step)))}
+                onInsert={(p, next) => restructure((s) => editList(s, p, insertBefore(next)))}
                 onCopy={copyStep}
                 onCut={(p, cutStep) => {
                   copyStep(cutStep);
@@ -1519,6 +1565,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                   })
                 }
               />
+              </Fragment>
             ))}
             <AddMenu onAdd={(step) => editSteps((s) => [...s, step])} clip={clip} />
           </div>
