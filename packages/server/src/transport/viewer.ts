@@ -28,24 +28,6 @@ const TOUCH_ACTIONS = {
 } as const;
 
 /**
- * Messages that claim an empty controller seat on their own.
- *
- * Doing something to the phone says you mean to drive it. Changing the stream
- * you are watching — quality, codec, screen-off — does not, so those stay
- * refused for a viewer even when nobody is driving: they alter what everyone
- * else sees, and the person who wanted them can say so with the button.
- */
-const CLAIMS_CONTROL = new Set<ClientMessage["type"]>([
-  "touch",
-  "scroll",
-  "key",
-  "text",
-  "navigate",
-  "rotate",
-  "clipboardSet",
-]);
-
-/**
  * One connected client of a device session: owns the send queue, forwards
  * media packets, and routes incoming control messages.
  */
@@ -238,14 +220,6 @@ export class Viewer implements SessionViewer {
       case "takeControl":
         this.session.takeControl(this);
         return;
-      case "releaseControl":
-        this.session.releaseControl(this);
-        return;
-      case "claimControl":
-        // Silent when someone else is driving — the client keeps showing the
-        // hint, and taking it off them stays an explicit takeControl.
-        this.session.claimIfVacant(this);
-        return;
       case "viewerCaps":
         // Any viewer may lower the shared encode (worst-viewer-wins policy).
         this.session.setViewerCap(this, message.maxLadderIndex);
@@ -264,14 +238,8 @@ export class Viewer implements SessionViewer {
     }
 
     // Everything below injects input or changes shared session state —
-    // restricted to the controlling viewer. Acting on the device when the seat
-    // happens to be empty takes it: reaching for a phone nobody is driving is
-    // the same statement as pressing 取得控制, and demanding the button as well
-    // is what made switching between your own clients tedious. Only an empty
-    // seat — someone else driving still has to be asked.
-    if (!this.session.isControlling(this) && !(CLAIMS_CONTROL.has(message.type) && this.session.claimIfVacant(this))) {
-      return;
-    }
+    // restricted to the controlling viewer.
+    if (!this.session.isControlling(this)) return;
 
     if (message.type === "setScreenOff") {
       this.session.setScreenOff(message.off);

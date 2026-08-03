@@ -45,18 +45,6 @@ export type ClientMessage =
   | { type: "clipboardSet"; content: string; paste: boolean }
   | { type: "requestKeyframe" }
   | { type: "takeControl" }
-  /**
-   * Give the seat up without anyone asking for it — sent when this client goes
-   * to the background. With several of your own clients open on one device, the
-   * one you walked away from should not keep holding control.
-   */
-  | { type: "releaseControl" }
-  /**
-   * Take control only if nobody holds it. Unlike `takeControl` this never
-   * interrupts anyone, so it is safe to send on a tap: reaching for a device
-   * that is sitting idle is the same statement as pressing the button.
-   */
-  | { type: "claimControl" }
   /** Keep the controlled device's physical screen off (lower heat/battery). */
   | { type: "setScreenOff"; off: boolean }
   /** Viewer capability: cap auto-adaptation at this ladder index (software decoders). */

@@ -148,33 +148,6 @@ export class ManagedSession {
     viewer.notifyControlChanged(true);
   }
 
-  /**
-   * Hand the seat back, unasked — the client backgrounded itself. Nobody
-   * inherits it; it is left empty for whoever acts on the device next.
-   */
-  releaseControl(viewer: SessionViewer): void {
-    if (this.controllingViewer !== viewer) return;
-    this.controllingViewer = undefined;
-    viewer.notifyControlChanged(false);
-  }
-
-  /**
-   * Sit down in an empty seat. False when someone else is driving: control
-   * still cannot be pulled off an active person without asking for it.
-   *
-   * This is what makes the release above worth doing. Switching between your
-   * own clients would otherwise mean pressing 取得控制 on arrival every time;
-   * with both halves in place, the one you left lets go and the one in your
-   * hands takes over the moment you touch it.
-   */
-  claimIfVacant(viewer: SessionViewer): boolean {
-    if (this.controllingViewer === viewer) return true;
-    if (this.controllingViewer) return false;
-    this.controllingViewer = viewer;
-    viewer.notifyControlChanged(true);
-    return true;
-  }
-
   /** Snapshot of attached viewers for the connection admin listing. */
   connections(): ViewerConnection[] {
     return [...this.viewers].map((v) => v.connectionInfo(this.controllingViewer === v));
