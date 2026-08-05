@@ -39,6 +39,17 @@ const IS_COARSE_POINTER = typeof matchMedia !== "undefined" && matchMedia("(poin
 /** Ladder rung (720p / 2 Mbps / 30) a software decoder caps auto-adaptation at. */
 const SOFTWARE_MAX_LADDER_INDEX = 3;
 
+/**
+ * Devices this tab means to be driving.
+ *
+ * Module scope, not component state: switching devices unmounts the whole
+ * session, and the point of this is to outlive that. Written by the control
+ * button and by leaving a device you were driving; read on arrival, where it
+ * turns into a claim for the seat you left. Not persisted — a fresh page is a
+ * fresh intent, and it says nothing the server would honour anyway.
+ */
+const driving = new Set<string>();
+
 /** Copy that also works outside secure contexts (plain-HTTP LAN access). */
 function copyTextFallback(text: string): void {
   if (navigator.clipboard) {
@@ -89,6 +100,13 @@ export function Session({
   const [stats, setStats] = useState<Extract<ServerMessage, { type: "stats" }> | undefined>();
   const [showStats, setShowStats] = useState(false);
   const [controlling, setControlling] = useState(true);
+  /**
+   * Whether the server has actually given us the controls, as opposed to the
+   * optimistic `controlling` above that keeps input alive until `hello` lands.
+   * Read from the connection effect's cleanup, which must not re-run on every
+   * change of control — hence a ref rather than a dependency.
+   */
+  const controllingRef = useRef(false);
   const [screenOff, setScreenOff] = useState(false);
   const [transport, setTransport] = useState<TransportKind | undefined>();
   /**
@@ -241,6 +259,10 @@ export function Session({
     const container = containerRef.current;
     if (!container) return;
 
+    // A new device is a fresh answer to "do we hold the controls" — until its
+    // hello says otherwise, no.
+    controllingRef.current = false;
+
     const pipeline = new VideoPipeline();
     pipeline.element.className = "session-canvas";
     container.appendChild(pipeline.element);
@@ -262,10 +284,16 @@ export function Session({
             setQuality(message.quality);
             setCodec(message.codec);
             setControlling(message.controlling);
+            controllingRef.current = message.controlling;
             setScreenOff(message.screenOff);
+            // Back at a device this tab was driving: pick the seat up again.
+            // Refused server-side if someone else took it meanwhile, which is
+            // the case where you should have to ask.
+            if (!message.controlling && driving.has(serial)) client.send({ type: "claimControl" });
             break;
           case "controlChanged":
             setControlling(message.controlling);
+            controllingRef.current = message.controlling;
             break;
           case "screenOffChanged":
             setScreenOff(message.off);
@@ -429,6 +457,17 @@ export function Session({
       void wakeLock?.release().catch(() => {});
       window.removeEventListener("focus", syncClipboard);
       pipeline.element.removeEventListener("pointerdown", focusIme);
+      // Leaving a device we were driving: hand the seat back on the way out,
+      // and remember that we want it again. Switching to another device is not
+      // the same as walking away, and holding a phone nobody is looking at
+      // helps no one. Sent before close() so the frame goes with the closing
+      // handshake rather than into a dead socket.
+      if (controllingRef.current) {
+        driving.add(serial);
+        client.send({ type: "releaseControl" });
+      } else {
+        driving.delete(serial);
+      }
       client.close();
       audio.dispose();
       audioRef.current = undefined;
@@ -475,11 +514,21 @@ export function Session({
               {state.status === "kicked" && <span className="error-text">此連線已被中斷</span>}
               {state.status === "error" && <span className="error-text">{state.detail ?? "錯誤"}</span>}
               <span style={{ flex: 1 }} />
+              {/* A switch, not a one-way door: pressing it while controlling
+                  steps back to view mode. Stepping back on purpose also clears
+                  the intent to drive this device, so returning to it later
+                  leaves you watching. */}
               <button
                 className={`mode-btn ${controlling ? "controlling" : "viewing"}`}
-                title={controlling ? "你正在控制此裝置" : "目前為檢視模式 — 點擊取得控制權"}
+                title={controlling ? "你正在控制此裝置 — 點擊改為檢視" : "目前為檢視模式 — 點擊取得控制權"}
                 onClick={() => {
-                  if (!controlling) send({ type: "takeControl" });
+                  if (controlling) {
+                    driving.delete(serial);
+                    send({ type: "releaseControl" });
+                  } else {
+                    driving.add(serial);
+                    send({ type: "takeControl" });
+                  }
                 }}
               >
                 {controlling ? "控制中" : "取得控制"}
@@ -583,7 +632,13 @@ export function Session({
                 view mode) flash the hint instead of silently doing nothing. */}
             <div className="view-catch" onClick={showControlHint} />
             {controlHint && (
-              <button className="control-hint" onClick={() => send({ type: "takeControl" })}>
+              <button
+                className="control-hint"
+                onClick={() => {
+                  driving.add(serial);
+                  send({ type: "takeControl" });
+                }}
+              >
                 檢視模式 — 點擊取得控制權
               </button>
             )}

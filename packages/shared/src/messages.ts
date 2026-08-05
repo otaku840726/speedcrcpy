@@ -45,6 +45,15 @@ export type ClientMessage =
   | { type: "clipboardSet"; content: string; paste: boolean }
   | { type: "requestKeyframe" }
   | { type: "takeControl" }
+  /** Give the seat up. Sent when you press 控制中 to step back, and on the way
+   * out of a device you were driving. Nobody inherits it. */
+  | { type: "releaseControl" }
+  /**
+   * Take control only if nobody holds it. Unlike `takeControl` this never
+   * interrupts anyone — it is how returning to a device you were driving picks
+   * the seat back up without pulling it off whoever took it meanwhile.
+   */
+  | { type: "claimControl" }
   /** Keep the controlled device's physical screen off (lower heat/battery). */
   | { type: "setScreenOff"; off: boolean }
   /** Viewer capability: cap auto-adaptation at this ladder index (software decoders). */

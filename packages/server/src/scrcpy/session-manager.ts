@@ -148,6 +148,29 @@ export class ManagedSession {
     viewer.notifyControlChanged(true);
   }
 
+  /**
+   * Step back from the controls, on purpose. Nobody inherits it — the seat is
+   * left empty for whoever asks next.
+   */
+  releaseControl(viewer: SessionViewer): void {
+    if (this.controllingViewer !== viewer) return;
+    this.controllingViewer = undefined;
+    viewer.notifyControlChanged(false);
+  }
+
+  /**
+   * Sit down in an empty seat. False when someone else is driving: control
+   * still cannot be pulled off an active person without asking for it, so this
+   * is safe to send on arrival at a device you were driving before.
+   */
+  claimIfVacant(viewer: SessionViewer): boolean {
+    if (this.controllingViewer === viewer) return true;
+    if (this.controllingViewer) return false;
+    this.controllingViewer = viewer;
+    viewer.notifyControlChanged(true);
+    return true;
+  }
+
   /** Snapshot of attached viewers for the connection admin listing. */
   connections(): ViewerConnection[] {
     return [...this.viewers].map((v) => v.connectionInfo(this.controllingViewer === v));

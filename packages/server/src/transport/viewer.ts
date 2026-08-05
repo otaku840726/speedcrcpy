@@ -220,6 +220,14 @@ export class Viewer implements SessionViewer {
       case "takeControl":
         this.session.takeControl(this);
         return;
+      case "releaseControl":
+        this.session.releaseControl(this);
+        return;
+      case "claimControl":
+        // Silent when someone else is driving: the client stays in view mode
+        // and taking it off them remains an explicit takeControl.
+        this.session.claimIfVacant(this);
+        return;
       case "viewerCaps":
         // Any viewer may lower the shared encode (worst-viewer-wins policy).
         this.session.setViewerCap(this, message.maxLadderIndex);
