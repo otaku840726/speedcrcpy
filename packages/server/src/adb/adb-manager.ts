@@ -106,6 +106,13 @@ export class AdbManager {
     return () => this.listeners.delete(listener);
   }
 
+  /** For the health heartbeat. Listeners are added per connected browser and
+   * removed on close, so a count that only grows means closes are being
+   * missed — which would leak far more than these callbacks. */
+  counts(): { listeners: number; adbCached: number } {
+    return { listeners: this.listeners.size, adbCached: this.adbCache.size };
+  }
+
   /** Live adb devices merged with known-but-offline stored devices. */
   deviceInfos(): DeviceInfo[] {
     const infos: DeviceInfo[] = [];

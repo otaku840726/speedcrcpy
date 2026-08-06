@@ -47,7 +47,13 @@ async function loadCv(): Promise<typeof import("@techstark/opencv-js")> {
 }
 
 /** Capture the current screen as raw RGBA. Throws if screencap is unusable. */
+/** Captures since start, for the health heartbeat. Each one is an ~8 MB
+ * transfer over an adb shell, by far the most allocation this process does, so
+ * heap growth is worth reading against this number rather than against time. */
+export let capturesServed = 0;
+
 export async function capture(adb: Adb): Promise<Frame> {
+  capturesServed++;
   const shell = adb.subprocess.shellProtocol;
   if (!shell?.isSupported) throw new Error("shell protocol unavailable");
   // Tango reports a dropped adb stream as a struct-deserialization failure

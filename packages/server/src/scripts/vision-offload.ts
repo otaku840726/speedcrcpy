@@ -161,7 +161,8 @@ export const findTemplate = (
 ): Promise<MatchResult> => send({ kind: "findTemplate", frame, template, region, threshold });
 
 /** For /api/health: what the vision side is holding right now. */
-export const visionStatus = (): { running: boolean; callsServed: number } => ({
+export const visionStatus = (): { running: boolean; callsServed: number; pending: number } => ({
   running: !!child,
   callsServed,
+  pending: pending.size,
 });

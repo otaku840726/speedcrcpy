@@ -92,6 +92,17 @@ export class ReplayStore {
     return [...this.shots.keys()];
   }
 
+  /** How many entries are being held in memory, for the health heartbeat.
+   * Both lists are meant to stay bounded by the disk cap — a number that
+   * climbs all day says the pruning is not reaching them. */
+  counts(): { shots: number; events: number } {
+    let shots = 0;
+    let events = 0;
+    for (const list of this.shots.values()) shots += list.length;
+    for (const list of this.events.values()) events += list.length;
+    return { shots, events };
+  }
+
   /**
    * Everything recorded for a device between two times. Events are included
    * from slightly before the window so a run that started earlier still says

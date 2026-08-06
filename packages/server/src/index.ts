@@ -16,6 +16,7 @@ import { DraftStore } from "./scripts/draft-store.js";
 import { ReplayStore } from "./scripts/replay-store.js";
 import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
+import { startHealthLog } from "./health-log.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
 // device dropping (EPIPE on a closed adb socket, a scrcpy stream ending
@@ -103,6 +104,9 @@ app.get("/api/wt-info", async () => ({ ...wtInfo, token: wtInfo.enabled ? auth.i
 // Listen before starting the adb tracker: Tango's device-track socket is
 // unref'd, so it must not be the only thing keeping the process alive.
 await app.listen({ host: config.host, port: config.port });
+// Before adb, deliberately: if that start ever hangs, the heartbeat is the one
+// thing still saying what the process is holding.
+startHealthLog(adbManager, sessionManager, replayStore);
 await adbManager.start();
 screenManager.start();
 thumbnailManager.start();

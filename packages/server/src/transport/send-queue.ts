@@ -4,6 +4,9 @@ import type { WebSocket } from "ws";
 const LOW_WATER_BYTES = 64 * 1024;
 /** Re-check drain interval while the socket is backpressured. */
 const RETRY_MS = 4;
+/** Control messages held for a socket that is not draining. Generous — this is
+ * a ceiling against a dead peer, not a policy for a slow one. */
+const MAX_QUEUED_CONTROL = 256;
 
 /**
  * Priority send queue over one WebSocket: control > audio > video.
@@ -47,6 +50,12 @@ export class SendQueue {
   enqueueControl(frame: Uint8Array): void {
     if (this.closed) return;
     this.control.push(frame);
+    // Audio and video have always been bounded; this was not. A socket that
+    // stops draining without ever closing — a client the OS froze, a phone that
+    // left the network — goes on being handed stats and pings once a second for
+    // as long as the process lives. Oldest-first: a client that far behind will
+    // never catch up on them, and the recent ones are the ones worth having.
+    while (this.control.length > MAX_QUEUED_CONTROL) this.control.shift();
     this.pump();
   }
 
