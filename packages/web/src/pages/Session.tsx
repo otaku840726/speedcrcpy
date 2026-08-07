@@ -50,6 +50,17 @@ const SOFTWARE_MAX_LADDER_INDEX = 3;
  */
 const driving = new Set<string>();
 
+/**
+ * Devices this tab has sound turned on for. Same memory, same reason: switching
+ * devices rebuilt the audio pipeline muted, so every switch cost another tap on
+ * the speaker.
+ *
+ * Only ever written by that tap, which is what keeps it safe to act on: a page
+ * that has never been touched has an empty set, so nothing here can un-mute a
+ * device before the browser has an interaction to unlock playback with.
+ */
+const sounding = new Set<string>();
+
 /** Copy that also works outside secure contexts (plain-HTTP LAN access). */
 function copyTextFallback(text: string): void {
   if (navigator.clipboard) {
@@ -131,11 +142,11 @@ export function Session({
   }, [scriptsOpen]);
   const [controlHint, setControlHint] = useState(false);
   const hintTimerRef = useRef<number | undefined>(undefined);
-  // Sound is muted by default every session; a user tap unmutes (which also
-  // satisfies the browser's autoplay gesture). mutedRef gates the audio feed
-  // from inside the (memoized) event handlers.
-  const [muted, setMuted] = useState(true);
-  const mutedRef = useRef(true);
+  // Sound is muted until a tap says otherwise (which also satisfies the
+  // browser's autoplay gesture); after that this tab remembers per device.
+  // mutedRef gates the audio feed from inside the (memoized) event handlers.
+  const [muted, setMuted] = useState(!sounding.has(serial));
+  const mutedRef = useRef(!sounding.has(serial));
 
   const send = useCallback((message: ClientMessage) => {
     clientRef.current?.send(message);
@@ -145,8 +156,12 @@ export function Session({
     const next = !mutedRef.current;
     mutedRef.current = next;
     setMuted(next);
-    if (!next) void audioRef.current?.unlock();
-  }, []);
+    if (next) sounding.delete(serial);
+    else {
+      sounding.add(serial);
+      void audioRef.current?.unlock();
+    }
+  }, [serial]);
 
   // View-mode tap on the video: flash a brief "take control" hint, then fade.
   const showControlHint = useCallback(() => {
@@ -155,10 +170,11 @@ export function Session({
     hintTimerRef.current = window.setTimeout(() => setControlHint(false), 2000);
   }, []);
   useEffect(() => () => window.clearTimeout(hintTimerRef.current), []);
-  // Every device (re)opened starts muted — "default muted" applies per session.
+  // Arriving at a device: silent unless this tab was told otherwise for it.
   useEffect(() => {
-    setMuted(true);
-    mutedRef.current = true;
+    const quiet = !sounding.has(serial);
+    setMuted(quiet);
+    mutedRef.current = quiet;
   }, [serial]);
 
   // Apply a quality choice optimistically (server confirms via qualityChanged).
@@ -274,6 +290,10 @@ export function Session({
     const audio = new AudioPipeline();
     audioRef.current = audio;
     audio.onStateChange = setAudioState;
+    // A fresh AudioContext per device, so the one carrying the earlier tap is
+    // gone. Resuming it needs no new gesture — the page still holds the
+    // activation from the tap that put this device on the list.
+    if (sounding.has(serial)) void audio.unlock();
 
     const client = new SessionClient(serial, {
       onServerMessage(message: ServerMessage) {
