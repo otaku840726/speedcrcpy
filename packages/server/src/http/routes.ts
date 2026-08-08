@@ -199,6 +199,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       template: TemplateSchema,
       threshold: norm,
       region: RegionSchema.optional(),
+      tap: z.boolean().optional(),
       then: z.array(StepSchema).max(200),
       else: z.array(StepSchema).max(200).optional(),
       ...offSwitch,

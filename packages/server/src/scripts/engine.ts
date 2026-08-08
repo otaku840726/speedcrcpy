@@ -679,8 +679,17 @@ export class ScriptEngine {
         this.warnTemplateScale(run, step.template, frame.width, frame.height);
         const match = await findTemplate(frame, templateBytes(step.template), step.region, step.threshold);
         const hit = match.matches.length > 0;
+        // Tapping before the branch, on the frame that found it: a 找圖點擊
+        // inside `then` would search for the same picture on a second capture,
+        // and the screen it looks at is no longer the one that matched.
+        let tapped = "";
+        if (hit && step.tap) {
+          const [px, py] = this.toPixels(run, match.x, match.y);
+          await sh(adb, `input tap ${px} ${py}`);
+          tapped = ` → 點擊 ${px},${py}`;
+        }
         this.save(run, step.saveTo, hit);
-        this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)`);
+        this.log(run, `若找到圖:${hit ? "是" : "否"}(${(match.score * 100).toFixed(0)}%)${tapped}`);
         await this.runSteps(adb, run, (hit ? step.then : step.else) ?? []);
         return;
       }

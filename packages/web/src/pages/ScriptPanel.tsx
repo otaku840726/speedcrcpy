@@ -614,6 +614,15 @@ function StepRow({
           >
             設定與測試
           </button>
+          {/* Only on 若找到圖 — 找圖點擊 taps by definition. Tapping here rather
+              than from a 找圖點擊 inside 成立 saves that branch a second capture
+              of the picture this step has already found. */}
+          {step.type === "ifImage" && (
+            <label className="sp-case-tap" title="找到時直接點擊它,再走「成立」分支">
+              <input type="checkbox" checked={!!step.tap} onChange={(e) => set({ tap: e.target.checked || undefined })} />
+              找到就點擊
+            </label>
+          )}
           {step.type === "findTap" && (
             <PickSummary filter={step.filter} pick={step.pick} offsetX={step.offsetX} offsetY={step.offsetY} />
           )}

@@ -143,6 +143,14 @@ type ScriptStepKind =
       template: ScriptTemplate;
       threshold: number;
       region?: ScriptRegion;
+      /**
+       * Tap it when it is there, before taking the branch.
+       *
+       * A 找圖點擊 inside `then` would look for the same picture on a second
+       * capture — the expensive half again, against a screen that has had time
+       * to move on from the one that matched.
+       */
+      tap?: boolean;
       then: ScriptStep[];
       else?: ScriptStep[];
       /** Keep what this step found, under a declared variable name. */
