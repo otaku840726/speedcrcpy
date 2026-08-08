@@ -108,6 +108,28 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       ...saveSwitch,
     }),
     z.object({
+      type: z.literal("identify"),
+      // Capped like every other list here. The cost of a long one is real —
+      // each case is another template match on the same frame — but it is
+      // linear and paid inside one capture, so this is a sanity bound rather
+      // than a performance one.
+      cases: z
+        .array(
+          z.object({
+            name: z.string().min(1).max(30),
+            template: TemplateSchema,
+            threshold: norm,
+            region: RegionSchema.optional(),
+          }),
+        )
+        .max(20),
+      timeoutMs: Timeout,
+      saveX: VarName.optional(),
+      saveY: VarName.optional(),
+      ...offSwitch,
+      ...saveSwitch,
+    }),
+    z.object({
       type: z.literal("tapText"),
       text: z.string().min(1).max(100),
       region: RegionSchema.optional(),

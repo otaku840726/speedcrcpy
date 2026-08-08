@@ -237,7 +237,34 @@ type ScriptStepKind =
       else?: ScriptStep[];
       /** Keep what this step found, under a declared variable name. */
       saveTo?: string;
+    }
+  /**
+   * Which of several pictures is on screen — one capture, every template.
+   *
+   * Asking the same question with a chain of 找圖 steps costs one ~350 ms
+   * screencap each, and the answer is stale by the time the last one runs. Here
+   * the frame is taken once and every case is matched against that same moment,
+   * so the answer describes one instant rather than a second of drift.
+   */
+  | {
+      type: "identify";
+      cases: IdentifyCase[];
+      timeoutMs: number;
+      /** Name of the case that won, or "" if the timeout passed with none. */
+      saveTo?: string;
+      /** Where it was found, in the coordinate space taps use — so the branch
+       * that follows can act on it without capturing the screen again. */
+      saveX?: string;
+      saveY?: string;
     };
+
+/** One candidate in an 辨識情境 step: a picture, what to call it, how sure to be. */
+export interface IdentifyCase {
+  name: string;
+  template: ScriptTemplate;
+  threshold: number;
+  region?: ScriptRegion;
+}
 
 /** What each step is called. Shared so the runner's log says the same word the
  * editor puts on the row, and a log line can be matched to what produced it. */
@@ -247,6 +274,7 @@ export const SCRIPT_STEP_LABELS: Record<ScriptStep["type"], string> = {
   call: "呼叫模組",
   ifVar: "若變數",
   findTap: "找圖點擊",
+  identify: "辨識情境",
   ifImage: "若找到圖",
   tapText: "依文字點擊",
   ifText: "若文字含",

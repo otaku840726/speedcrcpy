@@ -160,6 +160,17 @@ export const findTemplate = (
   threshold?: number,
 ): Promise<MatchResult> => send({ kind: "findTemplate", frame, template, region, threshold });
 
+/**
+ * Match a list of templates against one frame — the frame crosses to the child
+ * once, however many templates there are.
+ *
+ * Returns the best score and position for each case, in the order given.
+ */
+export const identify = (
+  frame: Frame,
+  cases: { template: Uint8Array; region?: Region; threshold: number }[],
+): Promise<{ score: number; x: number; y: number }[]> => send({ kind: "identify", frame, cases });
+
 /** For /api/health: what the vision side is holding right now. */
 export const visionStatus = (): { running: boolean; callsServed: number; pending: number } => ({
   running: !!child,

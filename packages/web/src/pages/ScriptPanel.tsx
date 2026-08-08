@@ -17,6 +17,7 @@ import {
   replaceAt,
 } from "./step-tree";
 import { CallStepBody, IfVarBody } from "./script-call";
+import { IdentifyBody } from "./script-identify";
 import { asDraft, type Draft, draftBody, isSaved, newDraft, stableJson } from "./script-draft";
 import { VariablesPanel } from "./script-vars";
 import { TestPreview, type TestTarget } from "./TestPreview";
@@ -76,6 +77,7 @@ const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
   { key: true, make: () => ({ type: "stop", scope: "script" }) },
   { key: true, make: () => ({ type: "ifVar", name: "", compare: "==", then: [], else: [] }) },
   { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
+  { key: true, make: () => ({ type: "identify", cases: [], timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
   { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
@@ -434,6 +436,11 @@ function StepRow({
     </button>
   );
 
+  // Read before the bodies are built, not just by the chrome around them: a
+  // step whose whole content is a list says something shorter when folded.
+  const folds = collapsed.get(scriptKey) ?? new Set<string>();
+  const shut = folds.has(foldKey(path));
+
   let body: React.ReactNode = null;
   switch (step.type) {
     case "tap":
@@ -542,6 +549,18 @@ function StepRow({
       break;
     case "ifVar":
       body = <IfVarBody step={step} variables={variables} onChange={(patch) => set(patch as Partial<ScriptStep>)} />;
+      break;
+    case "identify":
+      body = (
+        <IdentifyBody
+          step={step}
+          variables={variables}
+          compact={shut}
+          onChange={(patch) => set(patch as Partial<ScriptStep>)}
+          pickTemplate={(apply) => pick("template", (r) => r.template && apply(r.template))}
+          pickRegion={(apply) => pick("region", (r) => r.region && apply(r.region))}
+        />
+      );
       break;
     case "findTap":
     case "ifImage":
@@ -664,9 +683,8 @@ function StepRow({
         : [];
 
   // A call is foldable too: expanding it is what opens the module's editor.
-  const foldable = branches.length > 0 || step.type === "call";
-  const folds = collapsed.get(scriptKey) ?? new Set<string>();
-  const shut = folds.has(foldKey(path));
+  // So is 辨識情境 — its list of pictures is the tallest thing a row can hold.
+  const foldable = branches.length > 0 || step.type === "call" || step.type === "identify";
   const toggleFold = () => {
     const next = collapsed.get(scriptKey) ?? new Set<string>();
     shut ? next.delete(foldKey(path)) : next.add(foldKey(path));

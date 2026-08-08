@@ -27,7 +27,22 @@ import type { Frame, Region } from "./vision.js";
 
 export type VisionRequest =
   | { id: number; kind: "recognize"; frame: Frame; region?: Region; needle?: string }
-  | { id: number; kind: "findTemplate"; frame: Frame; template: Uint8Array; region?: Region; threshold?: number };
+  | { id: number; kind: "findTemplate"; frame: Frame; template: Uint8Array; region?: Region; threshold?: number }
+  /**
+   * Several templates against one frame.
+   *
+   * A step that asks "which of these is on screen" could loop over
+   * `findTemplate`, but each of those copies the whole ~8 MB frame across the
+   * process boundary — the cost the step exists to avoid, paid again per
+   * template. Sending the frame once and the templates as a list keeps it to
+   * one crossing however long the list is.
+   */
+  | {
+      id: number;
+      kind: "identify";
+      frame: Frame;
+      cases: { template: Uint8Array; region?: Region; threshold: number }[];
+    };
 
 /** Every reply carries what the process is holding, so the parent can decide to
  * replace it without having to ask. */
@@ -35,6 +50,24 @@ export type VisionResponse = {
   id: number;
   health: { rss: number; largestBlockMb: number; atCeiling: boolean };
 } & ({ ok: true; value: unknown } | { ok: false; error: string });
+
+/** Best hit per case, in the order the cases were given. The choice of winner
+ * stays with the engine — it is the one that logs the reasoning, and a policy
+ * is easier to change there than behind a process boundary. */
+async function identify(
+  frame: Frame,
+  cases: { template: Uint8Array; region?: Region; threshold: number }[],
+): Promise<{ score: number; x: number; y: number }[]> {
+  const out: { score: number; x: number; y: number }[] = [];
+  for (const one of cases) {
+    // Sequential on purpose: each match is a synchronous WASM call, so racing
+    // them would only stack their allocations on the one heap that has a
+    // ceiling. This process exists to keep that heap survivable.
+    const match = await findTemplate(frame, one.template, one.region, one.threshold);
+    out.push({ score: match.score, x: match.x, y: match.y });
+  }
+  return out;
+}
 
 function health(): VisionResponse["health"] {
   const blocks = memoryBlocks();
@@ -50,7 +83,9 @@ process.on("message", async (request: VisionRequest) => {
     const value =
       request.kind === "recognize"
         ? await recognize(request.frame, request.region, request.needle)
-        : await findTemplate(request.frame, request.template, request.region, request.threshold);
+        : request.kind === "identify"
+          ? await identify(request.frame, request.cases)
+          : await findTemplate(request.frame, request.template, request.region, request.threshold);
     process.send?.({ id: request.id, ok: true, value, health: health() } satisfies VisionResponse);
   } catch (error) {
     // Logged here as well as returned: the caller shows one line to whoever is

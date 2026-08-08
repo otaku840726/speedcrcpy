@@ -18,7 +18,7 @@ import type {
 import type { Adb } from "@yume-chan/adb";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { parseNumber, textMatches } from "./ocr.js";
-import { findTemplate, recognize } from "./vision-offload.js";
+import { findTemplate, identify, recognize } from "./vision-offload.js";
 import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
 import type { Frame } from "./vision.js";
 
@@ -521,6 +521,53 @@ export class ScriptEngine {
           } else if (Date.now() >= deadline) {
             this.save(run, step.saveTo, false);
             this.log(run, "找圖逾時:期間都擷取不到畫面");
+            return;
+          }
+          await this.sleep(POLL_INTERVAL_MS, run);
+        }
+      }
+      case "identify": {
+        const deadline = Date.now() + step.timeoutMs;
+        for (;;) {
+          this.checkStop(run);
+          const frame = await this.pollFrame(run, adb);
+          if (frame) {
+            this.syncSize(run, frame);
+            for (const one of step.cases) this.warnTemplateScale(run, one.template, frame.width, frame.height);
+            // One capture, one crossing, every template — the whole point of
+            // the step. Each answer describes the same instant, which a chain
+            // of 找圖 steps cannot say about itself.
+            const scores = await identify(
+              frame,
+              step.cases.map((c) => ({ template: templateBytes(c.template), region: c.region, threshold: c.threshold })),
+            );
+            let best: { name: string; score: number; x: number; y: number } | undefined;
+            scores.forEach((got, i) => {
+              const one = step.cases[i];
+              if (!one || got.score < one.threshold) return;
+              if (!best || got.score > best.score) best = { name: one.name, ...got };
+            });
+            if (best) {
+              const [px, py] = this.toPixels(run, best.x, best.y);
+              this.save(run, step.saveTo, best.name);
+              this.save(run, step.saveX, px);
+              this.save(run, step.saveY, py);
+              this.log(run, `辨識情境:${best.name} ${(best.score * 100).toFixed(0)}% @ ${px},${py}`);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              this.save(run, step.saveTo, "");
+              // Everyone's best score, because "none of them matched" is not
+              // actionable — which one nearly did, and by how much, is.
+              const near = scores
+                .map((got, i) => `${step.cases[i]?.name ?? i}:${(got.score * 100).toFixed(0)}%`)
+                .join(" ");
+              this.log(run, `辨識情境逾時,都不符合(${near})`);
+              return;
+            }
+          } else if (Date.now() >= deadline) {
+            this.save(run, step.saveTo, "");
+            this.log(run, "辨識情境逾時:期間都擷取不到畫面");
             return;
           }
           await this.sleep(POLL_INTERVAL_MS, run);
