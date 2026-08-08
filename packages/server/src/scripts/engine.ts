@@ -17,11 +17,11 @@ import type {
 } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
 import type { AdbManager } from "../adb/adb-manager.js";
+import { foregroundApp, isPackageName, startApp, stopApp } from "../scrcpy/apps.js";
 import { parseNumber, textMatches } from "./ocr.js";
 import { findTemplate, identify, recognize } from "./vision-offload.js";
 import { capture, colorAt, colorMatches, parseHex } from "./vision.js";
 import type { Frame } from "./vision.js";
-
 
 const decoder = new TextDecoder();
 
@@ -525,6 +525,39 @@ export class ScriptEngine {
           }
           await this.sleep(POLL_INTERVAL_MS, run);
         }
+      }
+      case "app": {
+        if (!isPackageName(step.package)) {
+          this.log(run, `App 啟停:「${step.package}」不是有效的套件名稱`);
+          return;
+        }
+        if (step.action !== "start") {
+          await stopApp(adb, step.package);
+          this.log(run, `已關閉 ${step.package}`);
+        }
+        if (step.action === "stop") return;
+        await startApp(adb, step.package);
+        // Launching returns as soon as the intent is sent, so without this the
+        // next step looks at whatever was on screen before — usually the
+        // launcher, briefly, which matches nothing and burns the next step's
+        // whole timeout.
+        const waitMs = step.waitMs ?? 0;
+        const deadline = Date.now() + waitMs;
+        for (;;) {
+          if (waitMs <= 0) break;
+          this.checkStop(run);
+          if ((await foregroundApp(adb)) === step.package) {
+            this.log(run, `已啟動 ${step.package}`);
+            return;
+          }
+          if (Date.now() >= deadline) {
+            this.log(run, `已啟動 ${step.package},但 ${waitMs}ms 內沒有回到前景`);
+            return;
+          }
+          await this.sleep(POLL_INTERVAL_MS, run);
+        }
+        this.log(run, `已啟動 ${step.package}`);
+        return;
       }
       case "identify": {
         const deadline = Date.now() + step.timeoutMs;

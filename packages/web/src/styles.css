@@ -1047,6 +1047,11 @@ option {
   max-height: 100%;
   border-radius: 3px;
 }
+/* Package names are long and all look alike at a glance — give the select room
+   to show the tail, which is the part that differs. */
+.sp-package {
+  max-width: 260px;
+}
 /* 辨識情境: one row per picture, stacked. Full width of the step body so the
    name fields line up — a column you read down is the point of the step. */
 .sp-cases {

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
 import { saveConfig } from "../config.js";
+import { listApps } from "../scrcpy/apps.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
@@ -106,6 +107,15 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
       pick: PickSchema,
       ...offSwitch,
       ...saveSwitch,
+    }),
+    z.object({
+      type: z.literal("app"),
+      action: z.enum(["restart", "start", "stop"]),
+      // Shape-checked here as well as before the shell line: a bad name should
+      // be a 400 on save, not a step that quietly does nothing at 3am.
+      package: z.string().min(3).max(120).regex(/^[a-zA-Z][\w]*(\.[\w]+)+$/),
+      waitMs: Timeout.optional(),
+      ...offSwitch,
     }),
     z.object({
       type: z.literal("identify"),
@@ -515,6 +525,17 @@ export function registerRoutes(
       return { ok: true, kicked };
     }
     return reply.code(400).send({ error: "bad_request" });
+  });
+
+  // Installed apps plus whichever is on screen — what the App 啟停 step's
+  // picker offers, so nobody has to type a package name from memory.
+  app.get<{ Params: { serial: string } }>("/api/devices/:serial/apps", async (request, reply) => {
+    try {
+      const adb = await adbManager.getAdb(request.params.serial);
+      return await listApps(adb);
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "read_failed" });
+    }
   });
 
   // Device display resolution/density (wm size / wm density) override.

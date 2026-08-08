@@ -17,6 +17,7 @@ import {
   replaceAt,
 } from "./step-tree";
 import { CallStepBody, IfVarBody } from "./script-call";
+import { AppStepBody } from "./script-app";
 import { IdentifyBody } from "./script-identify";
 import { asDraft, type Draft, draftBody, isSaved, newDraft, stableJson } from "./script-draft";
 import { VariablesPanel } from "./script-vars";
@@ -78,6 +79,7 @@ const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
   { key: true, make: () => ({ type: "ifVar", name: "", compare: "==", then: [], else: [] }) },
   { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "identify", cases: [], timeoutMs: 8000 }) },
+  { key: false, make: () => ({ type: "app", action: "restart", package: "", waitMs: 15000 }) },
   { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
   { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
   { key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
@@ -351,6 +353,7 @@ function Picker({ serial, mode, onPick, onClose }: { serial: string; mode: PickM
 function StepRow({
   step,
   path,
+  serial,
   onChange,
   onRemove,
   onMove,
@@ -376,6 +379,8 @@ function StepRow({
 }: {
   step: ScriptStep;
   path: Path;
+  /** Which device to ask about installed apps — the App step's picker needs it. */
+  serial: string;
   onChange: (path: Path, next: ScriptStep) => void;
   onRemove: (path: Path) => void;
   onMove: (path: Path, dir: -1 | 1) => void;
@@ -549,6 +554,9 @@ function StepRow({
       break;
     case "ifVar":
       body = <IfVarBody step={step} variables={variables} onChange={(patch) => set(patch as Partial<ScriptStep>)} />;
+      break;
+    case "app":
+      body = <AppStepBody step={step} serial={serial} onChange={(patch) => set(patch as Partial<ScriptStep>)} />;
       break;
     case "identify":
       body = (
@@ -768,6 +776,7 @@ function StepRow({
             <InsertPoint clip={clip} onInsert={(s) => onInsert([...intoBranch(path, branch), { index: i }], s)} />
             <StepRow
               step={child}
+              serial={serial}
               path={[...intoBranch(path, branch), { index: i }]}
               onChange={onChange}
               onRemove={onRemove}
@@ -887,6 +896,7 @@ function InsertPoint({ onInsert, clip }: { onInsert: (step: ScriptStep) => void;
 function ModuleEditor({
   scriptId,
   scripts,
+  serial,
   onSaved,
   pick,
   probe,
@@ -896,6 +906,8 @@ function ModuleEditor({
 }: {
   scriptId: string;
   scripts: Script[];
+  /** Which device the App picker asks about. */
+  serial: string;
   onSaved: () => void;
   pick: (mode: PickMode, apply: (r: PickResult) => void) => void;
   probe: (target: TestTarget, path: Path, step: ScriptStep) => void;
@@ -981,6 +993,7 @@ function ModuleEditor({
           <InsertPoint clip={clip} onInsert={(s) => editSteps((prev) => editList(prev, [{ index: i }], insertBefore(s)))} />
           <StepRow
             step={step}
+            serial={serial}
             path={[{ index: i }]}
             onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
             onRemove={(p) => editSteps((s) => editList(s, p, removeAt()))}
@@ -1531,6 +1544,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
               <InsertPoint clip={clip} onInsert={(s) => restructure((prev) => editList(prev, [{ index: i }], insertBefore(s)))} />
               <StepRow
                 step={step}
+                serial={serial}
                 path={[{ index: i }]}
                 onChange={(p, next) => editSteps((s) => editList(s, p, replaceAt(next)))}
                 onRemove={(p) => restructure((s) => editList(s, p, removeAt()))}
@@ -1556,6 +1570,7 @@ export function ScriptPanel({ serial, onClose }: { serial: string; onClose: () =
                   <ModuleEditor
                     scriptId={id}
                     scripts={scripts}
+                    serial={serial}
                     onSaved={() => void reload()}
                     pick={(mode, apply) => setPicker({ mode, apply })}
                     probe={(target, path, step) =>

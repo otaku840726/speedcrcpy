@@ -256,7 +256,29 @@ type ScriptStepKind =
        * that follows can act on it without capturing the screen again. */
       saveX?: string;
       saveY?: string;
+    }
+  /**
+   * Start, stop, or restart an app.
+   *
+   * The reason a script wants this is almost always the same one: something has
+   * gone wrong — a stuck loading screen, a session the server dropped — and the
+   * cheapest way back to a known state is to kill it and open it again.
+   */
+  | {
+      type: "app";
+      action: ScriptAppAction;
+      /** Android package name, e.g. `com.example.game`. */
+      package: string;
+      /**
+       * How long to wait for a started app to reach the foreground before
+       * carrying on regardless. Without this the next step runs against a
+       * splash screen, or against whatever was on top before.
+       */
+      waitMs?: number;
     };
+
+/** What an `app` step does to it. */
+export type ScriptAppAction = "restart" | "start" | "stop";
 
 /** One candidate in an 辨識情境 step: a picture, what to call it, how sure to be. */
 export interface IdentifyCase {
@@ -275,6 +297,7 @@ export const SCRIPT_STEP_LABELS: Record<ScriptStep["type"], string> = {
   ifVar: "若變數",
   findTap: "找圖點擊",
   identify: "辨識情境",
+  app: "App 啟停",
   ifImage: "若找到圖",
   tapText: "依文字點擊",
   ifText: "若文字含",
