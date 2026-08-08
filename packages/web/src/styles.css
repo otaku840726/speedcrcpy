@@ -1070,6 +1070,10 @@ option {
 .sp-case-name {
   width: 92px;
 }
+/* No name means the script cannot be saved, so say it on the field itself. */
+.sp-case-name.warn {
+  border-color: #f0a94b;
+}
 .sp-case-tap {
   display: inline-flex;
   align-items: center;

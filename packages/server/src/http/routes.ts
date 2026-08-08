@@ -857,7 +857,14 @@ export function registerRoutes(
       });
       // The engine's rule, not a second implementation of it: highest score
       // that cleared its own threshold.
-      const winner = results.filter((r) => r.passed).sort((a, b) => b.score - a.score)[0];
+      // By index, not by name. A case being tested may not be named yet, and an
+      // empty name is falsy — reporting the winner as "" had the caller say
+      // nothing matched while the row below it was marked as the one that did.
+      // Names can also repeat, which would mark every namesake as the winner.
+      let winnerIndex: number | null = null;
+      results.forEach((r, i) => {
+        if (r.passed && (winnerIndex === null || r.score > results[winnerIndex]!.score)) winnerIndex = i;
+      });
 
       return {
         ms,
@@ -865,7 +872,7 @@ export function registerRoutes(
         frameHeight: frame.height,
         preview: framePng(frame, PREVIEW_WIDTH).toString("base64"),
         results,
-        winner: winner?.name ?? null,
+        winnerIndex,
       };
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : "identify_failed" });

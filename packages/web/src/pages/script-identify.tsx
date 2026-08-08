@@ -5,7 +5,8 @@ import { Icon } from "../core/icons";
 
 interface Probe {
   ms: number;
-  winner: string | null;
+  /** Which case won, by position. A case being tested may not be named yet. */
+  winnerIndex: number | null;
   results: {
     name: string;
     score: number;
@@ -108,10 +109,14 @@ export function IdentifyBody({
                 <Icon name="image" size={16} />
               )}
             </button>
+            {/* The name is this step's output — 若變數 branches on it — so the
+                server refuses to save a case without one. Say so here rather
+                than at save time, where a 400 arrives after the work. */}
             <input
-              className="sp-case-name"
+              className={one.name ? "sp-case-name" : "sp-case-name warn"}
               value={one.name}
               placeholder="叫什麼"
+              title={one.name ? "" : "還沒取名字 — 這是存進變數的值,沒有它存不了檔"}
               onChange={(e) => editCase(i, { name: e.target.value })}
             />
             <input
@@ -170,13 +175,16 @@ export function IdentifyBody({
         {probe && (
           <div className="sp-verdict">
             <div className="sp-verdict-head">
-              {probe.winner ? (
+              {probe.winnerIndex !== null ? (
                 <>
-                  現在判為 <b>{probe.winner}</b>
+                  現在判為 <b>{probe.results[probe.winnerIndex]?.name || `第 ${probe.winnerIndex + 1} 張`}</b>
                   {/* The probe never taps — a test with side effects is not a
                       test. Say what the run would do instead. */}
-                  {step.cases.find((c) => c.name === probe.winner)?.tap && (
+                  {step.cases[probe.winnerIndex]?.tap && (
                     <span className="muted"> · 執行時會點擊它(測試不會)</span>
+                  )}
+                  {!probe.results[probe.winnerIndex]?.name && (
+                    <span className="sp-warn-inline"> · 這一張還沒取名字,存檔會被擋下</span>
                   )}
                 </>
               ) : (
@@ -188,7 +196,7 @@ export function IdentifyBody({
                 two pictures matching at once, and you can only see that coming
                 by reading the runner-up. */}
             {probe.results.map((r, i) => (
-              <div className={`sp-verdict-row${r.name === probe.winner ? " won" : ""}`} key={i}>
+              <div className={`sp-verdict-row${i === probe.winnerIndex ? " won" : ""}`} key={i}>
                 <img src={`data:image/png;base64,${r.crop}`} alt="" />
                 <span className="sp-verdict-name">{r.name || `(第 ${i + 1} 張)`}</span>
                 <span className={r.passed ? "sp-ok" : "muted"}>
@@ -246,6 +254,9 @@ export function IdentifyBody({
         </select>
       </span>
       {!named("text").length && <span className="sp-warn-inline">先在上面宣告一個文字變數來接結果</span>}
+      {step.cases.some((c) => !c.name) && (
+        <span className="sp-warn-inline">有情境還沒取名字 — 存檔會被擋下</span>
+      )}
     </>
   );
 }
