@@ -70,24 +70,30 @@ const KEY_LABELS: Record<string, string> = {
   volumeDown: "音量-",
 };
 
-/** The palette, in the order it reads on screen. Names come from the shared map
- * so the run log calls a step what the editor calls it. */
+/**
+ * The palette, in the order it reads on screen. Names come from the shared map
+ * so the run log calls a step what the editor calls it.
+ *
+ * New steps start with a zero timeout — look once, then move on. Waiting is a
+ * decision about a particular step, and a default that waits makes every step
+ * that does not need to sit there for eight seconds before anyone notices.
+ */
 const NEW_STEPS: { make: () => ScriptStep; key: boolean }[] = [
   { key: true, make: () => ({ type: "call", scriptId: "", args: [], outputs: [] }) },
   { key: true, make: () => ({ type: "goto", target: "" }) },
   { key: true, make: () => ({ type: "stop", scope: "script" }) },
   { key: true, make: () => ({ type: "ifVar", name: "", compare: "==", then: [], else: [] }) },
-  { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 8000 }) },
-  { key: true, make: () => ({ type: "identify", cases: [], timeoutMs: 8000 }) },
+  { key: true, make: () => ({ type: "findTap", template: EMPTY_TEMPLATE(), threshold: 0.85, timeoutMs: 0 }) },
+  { key: true, make: () => ({ type: "identify", cases: [], timeoutMs: 0 }) },
   { key: false, make: () => ({ type: "app", action: "restart", package: "", waitMs: 15000 }) },
   { key: true, make: () => ({ type: "ifImage", template: EMPTY_TEMPLATE(), threshold: 0.85, then: [], else: [] }) },
-  { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 8000 }) },
+  { key: true, make: () => ({ type: "tapText", text: "", timeoutMs: 0 }) },
   { key: true, make: () => ({ type: "ifText", text: "", then: [], else: [] }) },
   { key: true, make: () => ({ type: "ifNumber", compare: ">", value: 0, then: [], else: [] }) },
   { key: false, make: () => ({ type: "tap", x: 0.5, y: 0.5 }) },
   { key: false, make: () => ({ type: "swipe", x1: 0.5, y1: 0.7, x2: 0.5, y2: 0.3, durationMs: 300 }) },
   { key: false, make: () => ({ type: "wait", minMs: 500, maxMs: 500 }) },
-  { key: false, make: () => ({ type: "waitColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, timeoutMs: 8000 }) },
+  { key: false, make: () => ({ type: "waitColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, timeoutMs: 0 }) },
   { key: false, make: () => ({ type: "ifColor", x: 0.5, y: 0.5, color: "#ffffff", tolerance: 0.1, then: [], else: [] }) },
   { key: false, make: () => ({ type: "loop", count: 0, body: [] }) },
   { key: false, make: () => ({ type: "text", value: "" }) },
