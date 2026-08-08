@@ -1070,6 +1070,13 @@ option {
 .sp-case-name {
   width: 92px;
 }
+.sp-case-tap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .sp-case-del {
   margin-left: auto;
 }

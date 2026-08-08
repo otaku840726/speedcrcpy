@@ -82,7 +82,7 @@ export function IdentifyBody({
         辨識情境
         <span className="sp-summary">
           {step.cases.length} 張
-          {step.cases.length ? ` · ${step.cases.map((c) => c.name || "?").join("、")}` : ""}
+          {step.cases.length ? ` · ${step.cases.map((c) => `${c.name || "?"}${c.tap ? "(點)" : ""}`).join("、")}` : ""}
           {step.saveTo ? ` → ${step.saveTo}` : ""}
         </span>
       </>
@@ -128,6 +128,14 @@ export function IdentifyBody({
               <Icon name="crosshair" size={13} />
               {one.region ? `${(one.region.w * 100).toFixed(0)}×${(one.region.h * 100).toFixed(0)}%` : "整張"}
             </button>
+            {/* Recognising a popup is usually a prelude to dismissing it, and
+                doing that through a branch would look for the same picture on a
+                second capture — the slow half again, against a screen that has
+                had time to move. */}
+            <label className="sp-case-tap" title="命中這一張時,直接點擊它">
+              <input type="checkbox" checked={!!one.tap} onChange={(e) => editCase(i, { tap: e.target.checked || undefined })} />
+              點擊
+            </label>
             <button
               className="sp-case-del"
               title="移除這一張"
@@ -165,6 +173,11 @@ export function IdentifyBody({
               {probe.winner ? (
                 <>
                   現在判為 <b>{probe.winner}</b>
+                  {/* The probe never taps — a test with side effects is not a
+                      test. Say what the run would do instead. */}
+                  {step.cases.find((c) => c.name === probe.winner)?.tap && (
+                    <span className="muted"> · 執行時會點擊它(測試不會)</span>
+                  )}
                 </>
               ) : (
                 <span className="sp-warn-inline">現在沒有一張達到自己的門檻</span>

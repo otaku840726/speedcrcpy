@@ -574,18 +574,25 @@ export class ScriptEngine {
               frame,
               step.cases.map((c) => ({ template: templateBytes(c.template), region: c.region, threshold: c.threshold })),
             );
-            let best: { name: string; score: number; x: number; y: number } | undefined;
+            let best: { name: string; score: number; x: number; y: number; tap?: boolean } | undefined;
             scores.forEach((got, i) => {
               const one = step.cases[i];
               if (!one || got.score < one.threshold) return;
-              if (!best || got.score > best.score) best = { name: one.name, ...got };
+              if (!best || got.score > best.score) best = { name: one.name, tap: one.tap, ...got };
             });
             if (best) {
               const [px, py] = this.toPixels(run, best.x, best.y);
+              // Tapping here rather than through a branch into 找圖點擊: that
+              // would search for the same picture on a second capture, and the
+              // screen it looks at is no longer the one that was recognised.
+              if (best.tap) await sh(adb, `input tap ${px} ${py}`);
               this.save(run, step.saveTo, best.name);
               this.save(run, step.saveX, px);
               this.save(run, step.saveY, py);
-              this.log(run, `辨識情境:${best.name} ${(best.score * 100).toFixed(0)}% @ ${px},${py}`);
+              this.log(
+                run,
+                `辨識情境:${best.name} ${(best.score * 100).toFixed(0)}% @ ${px},${py}${best.tap ? " → 點擊" : ""}`,
+              );
               return;
             }
             if (Date.now() >= deadline) {

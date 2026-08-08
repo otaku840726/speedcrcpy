@@ -286,6 +286,15 @@ export interface IdentifyCase {
   template: ScriptTemplate;
   threshold: number;
   region?: ScriptRegion;
+  /**
+   * Tap what was found, when this is the case that won.
+   *
+   * Most situations are recognised in order to be dismissed — a popup, a
+   * confirm button. Branching to a 找圖點擊 to do that would search for the same
+   * picture on a second capture, which is both the slow half again and a chance
+   * for the screen to have moved on in between.
+   */
+  tap?: boolean;
 }
 
 /** What each step is called. Shared so the runner's log says the same word the
