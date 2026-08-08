@@ -16,7 +16,7 @@ import type { ReplayStore } from "../scripts/replay-store.js";
 import type { ScriptStore } from "../scripts/store.js";
 import { captureScreenshot } from "../scrcpy/screenshot.js";
 import { ocrModel } from "../scripts/ocr.js";
-import { findTemplate, recognize, visionStatus } from "../scripts/vision-offload.js";
+import { findTemplate, identify, recognize, visionStatus } from "../scripts/vision-offload.js";
 import { memoryBlocks } from "../scripts/vision-health.js";
 import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
@@ -384,6 +384,22 @@ const MatchProbeBody = z.object({
   /** Supply it and the probe also lists every match, so the editor can show the
    * author what the choices are instead of just the single best one. */
   threshold: z.number().min(0).max(1).optional(),
+});
+
+/** Same list an `identify` step carries, so the probe answers the question the
+ * step will actually be asked. */
+const IdentifyProbeBody = z.object({
+  cases: z
+    .array(
+      z.object({
+        name: z.string().max(30),
+        template: TemplateSchema,
+        threshold: norm,
+        region: RegionSchema.optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
 });
 
 const DisplayBody = z.object({
@@ -780,6 +796,77 @@ export function registerRoutes(
       };
     } catch (error) {
       return reply.code(502).send({ error: error instanceof Error ? error.message : "match_failed" });
+    }
+  });
+
+  /**
+   * What an 辨識情境 step would decide right now.
+   *
+   * Deliberately the same call the engine makes — one capture, every template,
+   * through the same vision process — so the answer here is the answer there.
+   * Testing the pictures one at a time would not catch the failure this step
+   * actually has: two of them matching, and the wrong one scoring higher.
+   */
+  app.post<{ Params: { serial: string } }>("/api/devices/:serial/identify", async (request, reply) => {
+    const body = IdentifyProbeBody.safeParse(request.body ?? {});
+    if (!body.success) return rejectInvalid(reply, request.body);
+    try {
+      const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
+      thumbnails.offer(request.params.serial, frame);
+      const started = Date.now();
+      const scores = await withTimeout(
+        identify(
+          frame,
+          body.data.cases.map((c) => ({
+            template: Buffer.from(c.template.png, "base64"),
+            region: c.region,
+            threshold: c.threshold,
+          })),
+        ),
+        "辨識情境",
+      );
+      const ms = Date.now() - started;
+
+      const results = body.data.cases.map((one, i) => {
+        const got = scores[i] ?? { score: 0, x: 0.5, y: 0.5, w: 0, h: 0 };
+        return {
+          name: one.name,
+          score: got.score,
+          passed: got.score >= one.threshold,
+          x: got.x,
+          y: got.y,
+          // What it actually landed on. A score alone cannot tell you it matched
+          // the wrong thing, and the box has to come from the match: a
+          // template's `capturedWidth` is the screen it was cut from, not its
+          // own size.
+          crop: framePng(frame, 160, {
+            x: (got.x - got.w / 2) * frame.width,
+            y: (got.y - got.h / 2) * frame.height,
+            w: got.w * frame.width,
+            h: got.h * frame.height,
+          }).toString("base64"),
+          suggestedThreshold: Math.max(0.5, Math.min(0.95, Math.round((got.score - 0.07) * 20) / 20)),
+          scaleMismatch:
+            one.template.capturedWidth > 0 &&
+            (one.template.capturedWidth !== frame.width || one.template.capturedHeight !== frame.height)
+              ? { captured: `${one.template.capturedWidth}×${one.template.capturedHeight}`, now: `${frame.width}×${frame.height}` }
+              : null,
+        };
+      });
+      // The engine's rule, not a second implementation of it: highest score
+      // that cleared its own threshold.
+      const winner = results.filter((r) => r.passed).sort((a, b) => b.score - a.score)[0];
+
+      return {
+        ms,
+        frameWidth: frame.width,
+        frameHeight: frame.height,
+        preview: framePng(frame, PREVIEW_WIDTH).toString("base64"),
+        results,
+        winner: winner?.name ?? null,
+      };
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "identify_failed" });
     }
   });
 

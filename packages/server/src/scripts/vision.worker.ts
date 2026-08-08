@@ -57,14 +57,17 @@ export type VisionResponse = {
 async function identify(
   frame: Frame,
   cases: { template: Uint8Array; region?: Region; threshold: number }[],
-): Promise<{ score: number; x: number; y: number }[]> {
-  const out: { score: number; x: number; y: number }[] = [];
+): Promise<{ score: number; x: number; y: number; w: number; h: number }[]> {
+  const out: { score: number; x: number; y: number; w: number; h: number }[] = [];
   for (const one of cases) {
     // Sequential on purpose: each match is a synchronous WASM call, so racing
     // them would only stack their allocations on the one heap that has a
     // ceiling. This process exists to keep that heap survivable.
     const match = await findTemplate(frame, one.template, one.region, one.threshold);
-    out.push({ score: match.score, x: match.x, y: match.y });
+    // The box as well as the point: a probe crops what the match landed on,
+    // and the template's own size is not recoverable from the step (its
+    // capturedWidth is the *screen* it was taken from, not the crop).
+    out.push({ score: match.score, x: match.x, y: match.y, w: match.w, h: match.h });
   }
   return out;
 }

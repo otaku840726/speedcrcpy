@@ -562,6 +562,7 @@ function StepRow({
       body = (
         <IdentifyBody
           step={step}
+          serial={serial}
           variables={variables}
           compact={shut}
           onChange={(patch) => set(patch as Partial<ScriptStep>)}

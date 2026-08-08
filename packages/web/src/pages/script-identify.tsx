@@ -1,5 +1,22 @@
 import type { IdentifyCase, ScriptRegion, ScriptTemplate, ScriptVariable } from "@speedcrcpy/shared";
+import { useState } from "react";
+import { api } from "../api";
 import { Icon } from "../core/icons";
+
+interface Probe {
+  ms: number;
+  winner: string | null;
+  results: {
+    name: string;
+    score: number;
+    passed: boolean;
+    crop: string;
+    suggestedThreshold: number;
+    scaleMismatch: { captured: string; now: string } | null;
+  }[];
+}
+
+const pct = (v: number) => `${(v * 100).toFixed(0)}%`;
 
 type IdentifyStep = {
   type: "identify";
@@ -24,6 +41,7 @@ type IdentifyStep = {
  */
 export function IdentifyBody({
   step,
+  serial,
   variables,
   onChange,
   pickTemplate,
@@ -31,6 +49,7 @@ export function IdentifyBody({
   compact,
 }: {
   step: IdentifyStep;
+  serial: string;
   variables: ScriptVariable[];
   onChange: (patch: Partial<IdentifyStep>) => void;
   pickTemplate: (apply: (t: ScriptTemplate) => void) => void;
@@ -38,8 +57,24 @@ export function IdentifyBody({
   /** Folded: how many pictures and where the answer goes, nothing else. */
   compact?: boolean;
 }) {
+  const [probe, setProbe] = useState<Probe>();
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState<string>();
+
   const editCase = (i: number, patch: Partial<IdentifyCase>) =>
     onChange({ cases: step.cases.map((c, j) => (j === i ? { ...c, ...patch } : c)) });
+
+  const test = () => {
+    setTesting(true);
+    setError(undefined);
+    api<Probe>(`/api/devices/${encodeURIComponent(serial)}/identify`, {
+      method: "POST",
+      body: JSON.stringify({ cases: step.cases }),
+    })
+      .then(setProbe)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "測試失敗"))
+      .finally(() => setTesting(false));
+  };
 
   if (compact) {
     return (
@@ -115,6 +150,52 @@ export function IdentifyBody({
         >
           <Icon name="plus" size={12} /> 新增一張
         </button>
+        <button
+          className="sp-probe"
+          disabled={testing || !step.cases.some((c) => c.template.png)}
+          title={step.cases.some((c) => c.template.png) ? "看這一步現在會判成哪個" : "請先框選圖像"}
+          onClick={test}
+        >
+          {testing ? "比對中…" : "測試"}
+        </button>
+        {error && <span className="sp-warn-inline">{error}</span>}
+        {probe && (
+          <div className="sp-verdict">
+            <div className="sp-verdict-head">
+              {probe.winner ? (
+                <>
+                  現在判為 <b>{probe.winner}</b>
+                </>
+              ) : (
+                <span className="sp-warn-inline">現在沒有一張達到自己的門檻</span>
+              )}
+              <span className="muted"> · {probe.ms} ms</span>
+            </div>
+            {/* Every score, not just the winner's: the failure this step has is
+                two pictures matching at once, and you can only see that coming
+                by reading the runner-up. */}
+            {probe.results.map((r, i) => (
+              <div className={`sp-verdict-row${r.name === probe.winner ? " won" : ""}`} key={i}>
+                <img src={`data:image/png;base64,${r.crop}`} alt="" />
+                <span className="sp-verdict-name">{r.name || `(第 ${i + 1} 張)`}</span>
+                <span className={r.passed ? "sp-ok" : "muted"}>
+                  {pct(r.score)} / 門檻 {pct(step.cases[i]?.threshold ?? 0)}
+                </span>
+                {r.scaleMismatch && (
+                  <span className="sp-warn-inline">
+                    截取時 {r.scaleMismatch.captured},現在 {r.scaleMismatch.now}
+                  </span>
+                )}
+                <button
+                  title="把這一張的門檻設成略低於剛才的分數"
+                  onClick={() => editCase(i, { threshold: r.suggestedThreshold })}
+                >
+                  套用 {pct(r.suggestedThreshold)}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       逾時
       <input

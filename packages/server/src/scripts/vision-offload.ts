@@ -169,7 +169,8 @@ export const findTemplate = (
 export const identify = (
   frame: Frame,
   cases: { template: Uint8Array; region?: Region; threshold: number }[],
-): Promise<{ score: number; x: number; y: number }[]> => send({ kind: "identify", frame, cases });
+): Promise<{ score: number; x: number; y: number; w: number; h: number }[]> =>
+  send({ kind: "identify", frame, cases });
 
 /** For /api/health: what the vision side is holding right now. */
 export const visionStatus = (): { running: boolean; callsServed: number; pending: number } => ({

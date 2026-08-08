@@ -1293,6 +1293,44 @@ option {
   font-size: 11px;
   padding: 3px 8px;
 }
+/* What 辨識情境 would decide right now: every case's score, the winner marked.
+   A full-width block under the list, because reading it is comparing rows. */
+.sp-verdict {
+  flex-basis: 100%;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 0.5px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-top: 4px;
+}
+.sp-verdict-head {
+  margin-bottom: 4px;
+}
+.sp-verdict-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  flex-wrap: wrap;
+}
+.sp-verdict-row.won {
+  background: rgba(77, 163, 255, 0.14);
+}
+.sp-verdict-row img {
+  width: 40px;
+  height: 26px;
+  object-fit: contain;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.sp-verdict-name {
+  min-width: 72px;
+}
+.sp-ok {
+  color: #3ddc84;
+}
 .sp-probe-out {
   font-size: 12px;
   background: rgba(0, 0, 0, 0.35);
