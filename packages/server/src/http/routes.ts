@@ -363,10 +363,85 @@ function usedBy(store: ScriptStore, id: string): { id: string; name: string }[] 
 /** A body that failed validation only because its template is enormous should
  * say so: "bad_request" sends the author looking through their step settings
  * for a fault that is really the size of the marquee they dragged. */
-function rejectInvalid(reply: FastifyReply, body: unknown) {
-  return hasOversizeTemplate(body)
-    ? reply.code(413).send({ error: "圖像太大,請重新框選小一點的範圍" })
-    : reply.code(400).send({ error: "bad_request" });
+/** Field names as the editor labels them, so the message points at something
+ * visible on screen rather than at a key in a JSON document. */
+const FIELD_LABELS: Record<string, string> = {
+  name: "名字",
+  label: "名稱",
+  template: "圖像",
+  threshold: "相似度",
+  region: "範圍",
+  package: "App",
+  text: "文字",
+  value: "值",
+  timeoutMs: "逾時",
+  waitMs: "等待",
+  cases: "情境",
+  steps: "步驟",
+  variables: "變數",
+  devices: "裝置",
+  scriptId: "模組",
+  color: "顏色",
+  saveTo: "存到",
+};
+
+/**
+ * Where the rejection happened, in the terms the editor uses.
+ *
+ * `steps.0.cases.16.name` is a true statement and a useless one: a step list is
+ * not numbered on screen and nobody counts pictures from zero. This turns it
+ * into 第 1 步 › 第 17 張 › 名字, which points at a row.
+ */
+function describeIssuePath(path: PropertyKey[]): string {
+  /** The lists whose members are steps, and what the editor calls each list. */
+  const STEP_LISTS: Record<string, string> = { steps: "", body: "內含", then: "成立", else: "否則" };
+  const parts: string[] = [];
+  for (let i = 0; i < path.length; i++) {
+    const key = String(path[i]);
+    const next = path[i + 1];
+    if (typeof next === "number") {
+      const nth = next + 1;
+      const list = STEP_LISTS[key];
+      if (list !== undefined) parts.push(`${list}第 ${nth} 步`);
+      else if (key === "cases") parts.push(`第 ${nth} 張`);
+      else parts.push(`${FIELD_LABELS[key] ?? key} 第 ${nth} 個`);
+      i++;
+      continue;
+    }
+    // A list named without an index — the complaint is about its length.
+    parts.push(FIELD_LABELS[key] ?? STEP_LISTS[key] ?? key);
+  }
+  return parts.join(" › ");
+}
+
+/** zod's own messages are English and phrased for a developer. These are the
+ * handful this API can actually produce, said the way the editor would. */
+function describeIssue(issue: z.ZodIssue): string {
+  if (issue.code === "too_small") {
+    if (issue.type === "string") return issue.minimum === 1 ? "不可空白" : `至少 ${issue.minimum} 個字`;
+    if (issue.type === "array") return `至少 ${issue.minimum} 個`;
+    return `不能小於 ${issue.minimum}`;
+  }
+  if (issue.code === "too_big") {
+    if (issue.type === "string") return `最多 ${issue.maximum} 個字`;
+    if (issue.type === "array") return `最多 ${issue.maximum} 個`;
+    return `不能大於 ${issue.maximum}`;
+  }
+  if (issue.code === "invalid_type") return issue.received === "undefined" ? "必填" : "型別不對";
+  if (issue.code === "invalid_string" || issue.code === "invalid_enum_value") return "格式不正確";
+  return issue.message;
+}
+
+function rejectInvalid(reply: FastifyReply, body: unknown, error?: z.ZodError) {
+  if (hasOversizeTemplate(body)) {
+    return reply.code(413).send({ error: "圖像太大,請重新框選小一點的範圍" });
+  }
+  // The first issue, not all of them: a discriminated union reports a failure
+  // against every member it tried, and the list is longer than it is useful.
+  const issue = error?.issues[0];
+  if (!issue) return reply.code(400).send({ error: "資料格式不正確" });
+  const where = describeIssuePath(issue.path);
+  return reply.code(400).send({ error: where ? `${where}:${describeIssue(issue)}` : describeIssue(issue) });
 }
 
 function withTimeout<T>(work: Promise<T>, label: string): Promise<T> {
@@ -603,7 +678,7 @@ export function registerRoutes(
 
   app.post("/api/scripts", async (request, reply) => {
     const body = ScriptBody.safeParse(request.body);
-    if (!body.success) return rejectInvalid(reply, request.body);
+    if (!body.success) return rejectInvalid(reply, request.body, body.error);
     const cycle = callCycle(scriptStore, body.data.id, body.data.steps as unknown[]);
     if (cycle) return reply.code(409).send({ error: `模組會繞回自己:${cycle}` });
     const flow = badControlFlow(body.data.steps as unknown[], new Set(), false, !!body.data.isModule);
@@ -759,7 +834,7 @@ export function registerRoutes(
   /** Try template matching now: where it matched, how well, and against what. */
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/match", async (request, reply) => {
     const body = MatchProbeBody.safeParse(request.body ?? {});
-    if (!body.success) return rejectInvalid(reply, request.body);
+    if (!body.success) return rejectInvalid(reply, request.body, body.error);
     try {
       const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
       thumbnails.offer(request.params.serial, frame);
@@ -811,7 +886,7 @@ export function registerRoutes(
    */
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/identify", async (request, reply) => {
     const body = IdentifyProbeBody.safeParse(request.body ?? {});
-    if (!body.success) return rejectInvalid(reply, request.body);
+    if (!body.success) return rejectInvalid(reply, request.body, body.error);
     try {
       const frame = await withTimeout(capture(await adbManager.getAdb(request.params.serial)), "擷取畫面");
       thumbnails.offer(request.params.serial, frame);
@@ -888,7 +963,7 @@ export function registerRoutes(
    */
   app.post<{ Params: { serial: string } }>("/api/devices/:serial/run-step", async (request, reply) => {
     const body = RunStepBody.safeParse(request.body);
-    if (!body.success) return rejectInvalid(reply, request.body);
+    if (!body.success) return rejectInvalid(reply, request.body, body.error);
     try {
       await scriptEngine.start(
         {
