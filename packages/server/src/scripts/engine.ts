@@ -37,7 +37,24 @@ const KEYCODES: Record<ScriptKey, number> = {
 };
 
 const MAX_LOG = 200;
-/** Safety net: a "forever" loop still yields, and a runaway script is bounded. */
+/**
+ * Ceiling on a **one-shot** run: a manual run or a daily firing that never
+ * finishes is a fault, and this is what says so instead of leaving a device
+ * occupied indefinitely.
+ *
+ * Not applied to a persistent script. Those are written around an outer 重複 0
+ * and are meant to run until something stops them, so a step count only
+ * interrupts one doing exactly what it was told — measured on a real script,
+ * about twelve steps an iteration reaches this in a day, healthy or not, and
+ * the restart that follows drops every variable. Their lifetime belongs to the
+ * scheduler, which already ends them on preemption, on someone picking the
+ * device up, and on being disabled.
+ *
+ * What a step ceiling was really guarding — a 重複 0 with an empty body
+ * spinning without ever awaiting — is held by the yield at the end of each
+ * loop iteration: measured at ~856 iterations a second and 8% of one core,
+ * with timers elsewhere still firing on time.
+ */
 const MAX_STEPS_PER_RUN = 100_000;
 /** Gap between vision polls — screencap itself costs ~350ms, so keep this small. */
 const POLL_INTERVAL_MS = 150;
@@ -397,7 +414,9 @@ export class ScriptEngine {
   }
 
   private async runStep(adb: Adb, run: Run, step: ScriptStep): Promise<void> {
-    if (++run.stepsRun > MAX_STEPS_PER_RUN) throw new Error("超過步驟上限,已中止");
+    if (++run.stepsRun > MAX_STEPS_PER_RUN && run.script.trigger.type !== "persistent") {
+      throw new Error("超過步驟上限,已中止");
+    }
     // Named steps prefix their log lines, which is the difference between
     // reading a log of twenty 依文字點擊 and reading one that says which.
     run.labelling = step.label;
