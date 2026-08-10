@@ -139,3 +139,14 @@ LAN 內用 `http://<主機IP>:8000` 也可以(localhost 例外允許)。
 - 所有 API 與 WebSocket 都需要登入(HMAC token,30 天效期)
 - 登入錯誤限流(每 IP 每分鐘 5 次)
 - 建議只在 Tailscale/VPN 內暴露;若用公網 IP 務必配 HTTPS 且用強密碼
+
+## 授權
+
+[PolyForm Noncommercial License 1.0.0](LICENSE) — 個人、教育、研究與非營利組織可自由使用、修改、散布,**不得用於商業用途**。
+
+這不是 OSI 定義的「開源」:開源定義不允許限制使用領域,所以任何禁止商用的授權都屬於「原始碼公開」。
+
+本專案在執行與打包時會取用第三方元件,它們各自的授權不受本授權影響:
+
+- [scrcpy](https://github.com/Genymobile/scrcpy) 的 `scrcpy-server.jar`(Apache-2.0)— 建置時下載,包含在 Docker image 內
+- [PP-OCRv6](https://github.com/PaddlePaddle/PaddleOCR) 模型權重(Apache-2.0)— 同上
