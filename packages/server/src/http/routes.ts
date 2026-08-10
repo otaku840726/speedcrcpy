@@ -119,10 +119,12 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
     }),
     z.object({
       type: z.literal("identify"),
-      // Capped like every other list here. The cost of a long one is real —
-      // each case is another template match on the same frame — but it is
-      // linear and paid inside one capture, so this is a sanity bound rather
-      // than a performance one.
+      // High enough not to be a limit anyone reaches by working: the two real
+      // constraints are the 16 MB request body, which has its own 413, and
+      // time, which is linear and the author's to spend (~270 ms per
+      // whole-screen picture, ~3 ms with a region framed). An earlier 20 was
+      // picked to look sensible beside the other caps and stopped a real
+      // script at seventeen.
       cases: z
         .array(
           z.object({
@@ -133,7 +135,7 @@ const StepSchema: z.ZodType<unknown> = z.lazy(() =>
             tap: z.boolean().optional(),
           }),
         )
-        .max(20),
+        .max(100),
       timeoutMs: Timeout,
       saveX: VarName.optional(),
       saveY: VarName.optional(),
@@ -476,7 +478,7 @@ const IdentifyProbeBody = z.object({
       }),
     )
     .min(1)
-    .max(20),
+    .max(100),
 });
 
 const DisplayBody = z.object({
