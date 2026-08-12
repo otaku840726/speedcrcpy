@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 440" width="880" height="440" role="img" aria-labelledby="t d">
+<title id="t">speedcrcpy 架構</title>
+<desc id="d">手機、伺服器、瀏覽器三者之間的兩條獨立路徑:鏡像串流需要瀏覽器,自動化腳本走 adb,瀏覽器關著也照常執行。</desc>
+<style>
+.b{fill:#f4f6f8;stroke:#9aa7b4;stroke-width:1.2;rx:10}
+.h{font:600 15px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#1b2530}
+.l{font:12.5px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#3d4a57}
+.s{font:11.5px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#6b7a89}
+.a{font:11.5px system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif;fill:#25405c}
+.ln{stroke:#5b7fa6;stroke-width:1.6;fill:none}
+.lg{stroke:#4f8a63;stroke-width:1.6;fill:none}
+.zone{fill:none;stroke-dasharray:5 4;stroke-width:1.3}
+</style>
+<defs>
+<marker id="ab" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0.5 L8.5 4.5 L0 8.5 z" fill="#5b7fa6"/></marker>
+<marker id="ag" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0.5 L8.5 4.5 L0 8.5 z" fill="#4f8a63"/></marker>
+</defs>
+
+<rect class="b" x="20" y="60" width="180" height="330"/>
+<text class="h" x="110" y="88" text-anchor="middle">Android 手機</text>
+<text class="s" x="110" y="108" text-anchor="middle">無線 adb,區網</text>
+<rect x="40" y="130" width="140" height="52" fill="#e7edf3" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="110" y="152" text-anchor="middle">scrcpy-server</text>
+<text class="s" x="110" y="170" text-anchor="middle">H.264 / Opus 編碼</text>
+<rect x="40" y="270" width="140" height="52" fill="#e9f1ea" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="110" y="292" text-anchor="middle">adb shell</text>
+<text class="s" x="110" y="310" text-anchor="middle">screencap / input</text>
+
+<rect class="b" x="320" y="60" width="240" height="330"/>
+<text class="h" x="440" y="88" text-anchor="middle">伺服器(常開主機)</text>
+<text class="s" x="440" y="108" text-anchor="middle">Node + Docker</text>
+<rect x="340" y="130" width="200" height="52" fill="#e7edf3" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="440" y="152" text-anchor="middle">串流中繼 · 壅塞控制</text>
+<text class="s" x="440" y="170" text-anchor="middle">優先級佇列,不轉碼</text>
+<rect x="340" y="238" width="200" height="52" fill="#e9f1ea" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="440" y="260" text-anchor="middle">腳本引擎 · 排程器</text>
+<text class="s" x="440" y="278" text-anchor="middle">優先權搶佔,讓位給真人</text>
+<rect x="340" y="302" width="200" height="52" fill="#e9f1ea" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="440" y="324" text-anchor="middle">視覺子行程</text>
+<text class="s" x="440" y="342" text-anchor="middle">找圖 OpenCV · 文字 PP-OCR</text>
+
+<rect class="b" x="680" y="60" width="180" height="200"/>
+<text class="h" x="770" y="88" text-anchor="middle">瀏覽器</text>
+<text class="s" x="770" y="108" text-anchor="middle">桌機 / 手機 / PWA</text>
+<rect x="700" y="130" width="140" height="52" fill="#e7edf3" stroke="#9aa7b4" rx="7"/>
+<text class="l" x="770" y="152" text-anchor="middle">WebCodecs 解碼</text>
+<text class="s" x="770" y="170" text-anchor="middle">觸控 / 鍵盤 / 剪貼簿</text>
+
+<path class="ln" d="M180 148 H336" marker-end="url(#ab)"/>
+<text class="a" x="258" y="140" text-anchor="middle">視訊 · 音訊</text>
+<path class="ln" d="M540 168 H700" marker-end="url(#ab)"/>
+<text class="a" x="620" y="140" text-anchor="middle">WebSocket</text>
+<text class="a" x="620" y="156" text-anchor="middle">或 WebTransport</text>
+<path class="ln" d="M700 196 H544" marker-end="url(#ab)"/>
+<text class="a" x="620" y="212" text-anchor="middle">輸入事件</text>
+<path class="ln" d="M336 210 H184" marker-end="url(#ab)"/>
+<text class="a" x="258" y="228" text-anchor="middle">注入到裝置</text>
+
+<path class="lg" d="M180 288 H336" marker-end="url(#ag)"/>
+<text class="a" x="258" y="280" text-anchor="middle">畫格 ~8 MB</text>
+<path class="lg" d="M336 328 H184" marker-end="url(#ag)"/>
+<text class="a" x="258" y="346" text-anchor="middle">點擊 · 滑動 · 按鍵</text>
+
+<rect class="zone" x="8" y="252" width="560" height="150" stroke="#4f8a63" rx="12"/>
+<text class="l" x="600" y="300" fill="#3c6b4c">自動化不需要瀏覽器</text>
+<text class="s" x="600" y="320">沒有人連線時照常執行,</text>
+<text class="s" x="600" y="338">螢幕關著也能抓畫面。</text>
+
+<text class="s" x="20" y="424">一台裝置同時只跑一支腳本;有人動手操作時腳本自動讓位,停手後接回。</text>
+</svg>
