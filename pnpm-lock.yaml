@@ -65,6 +65,9 @@ importers:
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2
+      sharp:
+        specifier: 0.33.5
+        version: 0.33.5
       ws:
         specifier: ^8.18.0
         version: 8.21.1

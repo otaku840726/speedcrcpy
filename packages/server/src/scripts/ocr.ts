@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type ScriptCandidate, scriptTextKey, scriptTextMatches } from "@speedcrcpy/shared";
-import { PNG } from "pngjs";
+import sharp from "sharp";
 import { readingOrder } from "./vision.js";
 import type { Frame, Region } from "./vision.js";
 
@@ -158,31 +158,35 @@ function clampRect(frame: Frame, r: { x: number; y: number; w: number; h: number
   };
 }
 
-/** Crop a pixel rect to a PNG, scaling up so short crops stay legible. */
-function cropPng(frame: Frame, r: { x: number; y: number; w: number; h: number }, scale: number): Buffer {
-  const png = new PNG({ width: r.w * scale, height: r.h * scale });
-  if (scale === 1) {
-    // Whole-frame passes go through here; copying by row beats per-pixel by far.
-    for (let row = 0; row < r.h; row++) {
-      const src = ((r.y + row) * frame.width + r.x) * 4;
-      png.data.set(frame.pixels.subarray(src, src + r.w * 4), row * r.w * 4);
-    }
-    for (let i = 3; i < png.data.length; i += 4) png.data[i] = 255;
-    return PNG.sync.write(png);
-  }
-  for (let row = 0; row < png.height; row++) {
-    const srcRow = (r.y + Math.floor(row / scale)) * frame.width;
-    for (let col = 0; col < png.width; col++) {
-      const src = (srcRow + r.x + Math.floor(col / scale)) * 4;
-      const dst = (row * png.width + col) * 4;
-      png.data[dst] = frame.pixels[src]!;
-      png.data[dst + 1] = frame.pixels[src + 1]!;
-      png.data[dst + 2] = frame.pixels[src + 2]!;
-      // screencap alpha is meaningful only sometimes; force opaque so the PNG is stable.
-      png.data[dst + 3] = 255;
-    }
-  }
-  return PNG.sync.write(png);
+/**
+ * Crop a pixel rect to a PNG, scaling up so short crops stay legible.
+ *
+ * Through sharp rather than by hand. This runs before any inference and used to
+ * be a quarter of what a small recognition cost: pngjs deflates in JavaScript,
+ * and above 1x the old version resampled pixel by pixel in a JS loop. Measured
+ * on a 1080x2400 frame — 400x90 at 3x: 16 ms to 2 ms; a 900x400 crop: 28 ms to
+ * 1 ms; the whole frame: 195 ms to 5 ms.
+ *
+ * `nearest` because that is what the hand-written loop did, and because
+ * duplicating pixels keeps glyph edges hard — a smoothing kernel invents
+ * intermediate greys along every stroke, which is not obviously kinder to a
+ * recogniser. `removeAlpha` for the reason the old comment gave: screencap's
+ * alpha channel is only sometimes meaningful, and an opaque image is a stable
+ * one. Compression level 1 because the file exists for one read, microseconds
+ * later, by this same process.
+ */
+function cropPng(
+  frame: Frame,
+  r: { x: number; y: number; w: number; h: number },
+  scale: number,
+): Promise<Buffer> {
+  const raw = Buffer.from(frame.pixels.buffer, frame.pixels.byteOffset, frame.pixels.byteLength);
+  return sharp(raw, { raw: { width: frame.width, height: frame.height, channels: 4 } })
+    .extract({ left: r.x, top: r.y, width: r.w, height: r.h })
+    .resize({ width: r.w * scale, height: r.h * scale, kernel: "nearest" })
+    .removeAlpha()
+    .png({ compressionLevel: 1 })
+    .toBuffer();
 }
 
 /** One recognition pass over a pixel rect; boxes come back in frame pixels. */
@@ -191,7 +195,7 @@ async function detect(frame: Frame, rect: { x: number; y: number; w: number; h: 
   const r = clampRect(frame, rect);
   const scale = Math.max(1, Math.min(MAX_SCALE, Math.ceil(MIN_LINE_PX / r.h)));
   const file = join(dir, `crop-${seq}.png`);
-  writeFileSync(file, cropPng(frame, r, scale));
+  writeFileSync(file, await cropPng(frame, r, scale));
   const raw = await ocr.detect(file);
   return raw.map((line) => {
     const xs = line.box.map((p) => p[0]!);
