@@ -41,6 +41,10 @@ const INDEX_FILE = "index.json";
 /** Rewriting a device's index on every frame would be the most frequent write
  * in the process; a run in progress only needs it fresh enough to follow. */
 const INDEX_FLUSH_MS = 5_000;
+/** Ceiling on recorded script events per device kept in memory and on disk.
+ * Captions and timeline ticks only need recent activity; an unbounded list
+ * grows indefinitely during long-running scripts and exhausts the JS heap. */
+const MAX_EVENTS_PER_DEVICE = 2_000;
 
 /**
  * A rolling timelapse of each device, made of screenshots that were taken
@@ -155,6 +159,9 @@ export class ReplayStore {
     if (!this.settings.enabled) return;
     const events = this.events.get(serial) ?? [];
     events.push({ at: Date.now(), message, scriptName });
+    if (events.length > MAX_EVENTS_PER_DEVICE) {
+      events.splice(0, events.length - MAX_EVENTS_PER_DEVICE);
+    }
     this.events.set(serial, events);
     this.dirty.add(serial);
     this.flush(Date.now());
@@ -180,8 +187,25 @@ export class ReplayStore {
    * history at the expense of one that only has a day of idle frames.
    */
   private prune(): void {
+    // Keep events bounded by each device's surviving pictures and the event cap,
+    // even when total disk usage is well under the MB ceiling.
+    for (const [serial, events] of this.events) {
+      const shots = this.shots.get(serial);
+      const cutoff = shots?.[0]?.at;
+      let next = events;
+      if (cutoff !== undefined) {
+        next = next.filter((e) => e.at >= cutoff);
+      }
+      if (next.length > MAX_EVENTS_PER_DEVICE) {
+        next = next.slice(-MAX_EVENTS_PER_DEVICE);
+      }
+      if (next.length !== events.length) {
+        this.events.set(serial, next);
+        this.dirty.add(serial);
+      }
+    }
+
     const limit = this.settings.maxMb * 1024 * 1024;
-    if (this.total <= limit) return;
     while (this.total > limit) {
       let oldest: { serial: string; shot: Shot } | undefined;
       for (const [serial, shots] of this.shots) {
@@ -199,7 +223,8 @@ export class ReplayStore {
       }
       // Events older than the oldest surviving picture have nothing to caption.
       const cutoff = shots[0]?.at ?? Infinity;
-      const events = (this.events.get(oldest.serial) ?? []).filter((e) => e.at >= cutoff);
+      let events = (this.events.get(oldest.serial) ?? []).filter((e) => e.at >= cutoff);
+      if (events.length > MAX_EVENTS_PER_DEVICE) events = events.slice(-MAX_EVENTS_PER_DEVICE);
       this.events.set(oldest.serial, events);
       this.dirty.add(oldest.serial);
       if (!shots.length) {
@@ -209,7 +234,7 @@ export class ReplayStore {
         this.dirty.delete(oldest.serial);
       }
     }
-    this.flush(Date.now(), true);
+    if (this.dirty.size) this.flush(Date.now(), true);
   }
 
   /** Read back what earlier sessions recorded, trusting the files over the
@@ -241,7 +266,11 @@ export class ReplayStore {
       if (existsSync(index)) {
         try {
           const saved = JSON.parse(readFileSync(index, "utf8")) as { events?: ReplayEvent[] };
-          this.events.set(entry.name, saved.events ?? []);
+          let events = saved.events ?? [];
+          const cutoff = shots[0]?.at;
+          if (cutoff !== undefined) events = events.filter((e) => e.at >= cutoff);
+          if (events.length > MAX_EVENTS_PER_DEVICE) events = events.slice(-MAX_EVENTS_PER_DEVICE);
+          this.events.set(entry.name, events);
         } catch {
           /* an unreadable index costs the captions, not the pictures */
         }

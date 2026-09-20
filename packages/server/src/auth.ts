@@ -35,6 +35,11 @@ export class Auth {
     if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
       fails.push(now);
       this.failures.set(ip, fails);
+      if (this.failures.size > 100) {
+        for (const [key, timestamps] of this.failures) {
+          if (!timestamps.some((t) => now - t < FAIL_WINDOW_MS)) this.failures.delete(key);
+        }
+      }
       return { error: "bad_password" };
     }
 
