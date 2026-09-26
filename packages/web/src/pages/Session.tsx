@@ -25,6 +25,7 @@ import { DeviceRail } from "./DeviceRail";
 import { ReplayPanel } from "./ReplayPanel";
 import { Screenshot } from "./Screenshot";
 import { ScriptPanel } from "./ScriptPanel";
+import { FileManagerModal } from "./FileManagerModal";
 
 const isWideScreen = () => (typeof window !== "undefined" ? window.innerWidth >= 700 : true);
 
@@ -125,8 +126,10 @@ export function Session({
    * one used to leave it hidden behind the first — you had to close the script
    * panel to discover that the replay had been open all along.
    */
-  const [panel, setPanel] = useState<"scripts" | "replay" | "shot">();
+  const [panel, setPanel] = useState<"scripts" | "replay" | "shot" | "files">();
   const scriptsOpen = panel === "scripts";
+  const [dragOverScreen, setDragOverScreen] = useState(false);
+  const [installToast, setInstallToast] = useState<{ status: "installing" | "success" | "error"; message: string } | null>(null);
 
   /** Unsaved script edits waiting somewhere. With the panel shut there is
    * nothing else on screen to say so, and the whole point of keeping a draft is
@@ -610,10 +613,65 @@ export function Session({
                 >
                   <Icon name="robot" />
                 </button>
+                <button
+                  title="檔案與 App 管理"
+                  onClick={() => setPanel((p) => (p === "files" ? undefined : "files"))}
+                  style={panel === "files" ? { borderColor: "var(--accent)", color: "var(--accent)" } : undefined}
+                >
+                  <Icon name="folder" />
+                </button>
               </div>
             </div>
           </div>
-      <div ref={containerRef} className="session-stage">
+      <div
+        ref={containerRef}
+        className="session-stage"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("Files")) {
+            e.preventDefault();
+            setDragOverScreen(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+          setDragOverScreen(false);
+        }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          setDragOverScreen(false);
+          const file = e.dataTransfer.files[0];
+          if (!file) return;
+          if (!file.name.toLowerCase().endsWith(".apk")) {
+            setInstallToast({ status: "error", message: "請拖曳 .apk 格式的檔案進行安裝" });
+            setTimeout(() => setInstallToast(null), 4000);
+            return;
+          }
+          setInstallToast({ status: "installing", message: `正在上傳並安裝 ${file.name}...` });
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            const res = await fetch(`/api/devices/${encodeURIComponent(serial)}/apps/install`, {
+              method: "POST",
+              body: formData,
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.ok) {
+              setInstallToast({ status: "success", message: `✅ ${file.name} 安裝成功！` });
+            } else {
+              setInstallToast({
+                status: "error",
+                message: `❌ 安裝失敗: ${data.error || data.output || res.status}`,
+              });
+            }
+          } catch (err) {
+            setInstallToast({
+              status: "error",
+              message: `❌ 安裝失敗: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          }
+          setTimeout(() => setInstallToast(null), 5000);
+        }}
+      >
         {deviceStats && (
           <div className="device-stats-overlay">
             <DeviceStatsChips stats={deviceStats} />
@@ -667,6 +725,27 @@ export function Session({
         {panel === "shot" && <Screenshot serial={serial} name={state.deviceName} onClose={() => setPanel(undefined)} />}
         {panel === "replay" && <ReplayPanel serial={serial} onClose={() => setPanel(undefined)} />}
         {panel === "scripts" && <ScriptPanel serial={serial} onClose={() => setPanel(undefined)} />}
+        {panel === "files" && (
+          <FileManagerModal
+            serial={serial}
+            deviceName={state.deviceName}
+            mode="drawer"
+            onClose={() => setPanel(undefined)}
+          />
+        )}
+        {dragOverScreen && (
+          <div className="mirror-apk-drop-overlay">
+            <Icon name="package" size={48} />
+            <div style={{ fontSize: 18, fontWeight: 600 }}>放開以安裝 APK 到此裝置</div>
+            <div className="muted">{state.deviceName || serial}</div>
+          </div>
+        )}
+        {installToast && (
+          <div className={`mirror-install-toast ${installToast.status}`}>
+            {installToast.status === "installing" && <div className="fm-spinner" style={{ width: 16, height: 16 }} />}
+            <span>{installToast.message}</span>
+          </div>
+        )}
         {clipboardToast !== undefined && (
           <button
             className="clipboard-toast"

@@ -1,4 +1,5 @@
 import fastifyCookie from "@fastify/cookie";
+import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyError, type FastifyInstance, type FastifyRequest } from "fastify";
 import { existsSync } from "node:fs";
@@ -52,6 +53,11 @@ export async function buildApp(
   // the whole ceiling; this leaves room for several of them in one script.
   const app = Fastify({ logger: { level: "info" }, bodyLimit: 16 * 1024 * 1024 });
   await app.register(fastifyCookie);
+  await app.register(fastifyMultipart, {
+    limits: {
+      fileSize: 1024 * 1024 * 1024, // 1GB limit for large APKs and files
+    },
+  });
 
   // A body over that ceiling is refused by Fastify before any route runs, and
   // its stock reply says "Payload Too Large" in English with no hint of which

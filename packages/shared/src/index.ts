@@ -3,3 +3,4 @@ export * from "./wt-protocol.js";
 export * from "./messages.js";
 export * from "./presets.js";
 export * from "./scripts.js";
+export * from "./files-apps.js";

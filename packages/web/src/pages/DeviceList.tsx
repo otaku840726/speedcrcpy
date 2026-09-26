@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { DeviceStatsChips, useDeviceStats } from "../core/device-stats";
 import { DeviceThumbnail } from "../core/DeviceThumbnail";
 import { useDeviceList } from "../core/events-socket";
+import { FileManagerModal } from "./FileManagerModal";
 
 const STATE_LABEL: Record<DeviceInfo["state"], string> = {
   device: "已連線",
@@ -25,6 +26,7 @@ export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) 
   const devices = useDeviceList();
   const [error, setError] = useState("");
   const [build, setBuild] = useState<{ version: string; builtAt: string }>();
+  const [fileManagerDevice, setFileManagerDevice] = useState<{ serial: string; name: string } | null>(null);
 
   // /api/health is unauthenticated — surface the running build (git SHA) so
   // it's clear which version is deployed.
@@ -75,8 +77,22 @@ export function DeviceList({ onOpenSession }: { onOpenSession: (serial: string) 
         <p className="muted">尚無裝置。手機開啟「開發人員選項 → 無線偵錯」後,輸入 IP:port 連線。</p>
       ) : (
         devices.map((device) => (
-          <DeviceCard key={device.serial} device={device} onOpenSession={onOpenSession} onAction={action} />
+          <DeviceCard
+            key={device.serial}
+            device={device}
+            onOpenSession={onOpenSession}
+            onOpenFiles={(serial, name) => setFileManagerDevice({ serial, name })}
+            onAction={action}
+          />
         ))
+      )}
+
+      {fileManagerDevice && (
+        <FileManagerModal
+          serial={fileManagerDevice.serial}
+          deviceName={fileManagerDevice.name}
+          onClose={() => setFileManagerDevice(null)}
+        />
       )}
 
       <SchedulePanel />
@@ -219,10 +235,12 @@ function ConnectionsPanel() {
 function DeviceCard({
   device,
   onOpenSession,
+  onOpenFiles,
   onAction,
 }: {
   device: DeviceInfo;
   onOpenSession: (serial: string) => void;
+  onOpenFiles: (serial: string, name: string) => void;
   onAction: (path: string, body: Record<string, unknown>) => Promise<void>;
 }) {
   const address = device.address ?? device.serial;
@@ -257,6 +275,7 @@ function DeviceCard({
               <button className="primary" onClick={() => onOpenSession(device.serial)}>
                 鏡像
               </button>
+              <button onClick={() => onOpenFiles(device.serial, device.name)}>檔案與 App</button>
               <button onClick={() => onAction("/api/devices/disconnect", { address })}>斷線</button>
             </>
           ) : (

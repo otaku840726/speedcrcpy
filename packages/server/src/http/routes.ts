@@ -5,7 +5,26 @@ import { z } from "zod";
 import type { AdbManager } from "../adb/adb-manager.js";
 import { AUTH_COOKIE, type Auth } from "../auth.js";
 import { saveConfig } from "../config.js";
-import { listApps } from "../scrcpy/apps.js";
+import {
+  clearAppData,
+  getApkPath,
+  installApkStream,
+  isPackageName,
+  listApps,
+  listDetailedApps,
+  startApp,
+  stopApp,
+  uninstallApp,
+} from "../scrcpy/apps.js";
+import { getCachedAppIconFile, resolveAppMetadata } from "../scrcpy/app-metadata.js";
+import {
+  getReadFileStream,
+  listFiles,
+  makeDirectory,
+  moveOrRenamePath,
+  removePath,
+  writeDeviceFile,
+} from "../scrcpy/file-manager.js";
 import type { DeviceStatsManager } from "../scrcpy/device-stats.js";
 import type { DisplayManager } from "../scrcpy/display-override.js";
 import type { SessionManager } from "../scrcpy/session-manager.js";
@@ -21,9 +40,30 @@ import { memoryBlocks } from "../scripts/vision-health.js";
 import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { readFile } from "node:fs/promises";
+import { posix } from "node:path";
+import { Readable } from "node:stream";
 import v8 from "node:v8";
 import { getRecentHealthLogs } from "../health-log.js";
 import { BUILT_AT, VERSION } from "../version.js";
+
+const PREVIEW_MIME_TYPES: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  svg: "image/svg+xml",
+};
+
+const FilePathQuery = z.object({ path: z.string().optional() });
+const FileDownloadQuery = z.object({ path: z.string().min(1) });
+const FileMkdirBody = z.object({ path: z.string().min(1) });
+const FileDeleteBody = z.object({ path: z.string().min(1) });
+const FileRenameBody = z.object({ src: z.string().min(1), dest: z.string().min(1) });
+const AppListQuery = z.object({ type: z.enum(["user", "system", "all"]).optional() });
+const AppActionBody = z.object({ packageName: z.string().min(1) });
+const AppExportQuery = z.object({ packageName: z.string().min(1) });
 
 const LoginBody = z.object({ password: z.string() });
 const AddressBody = z.object({ address: z.string().min(3) });
@@ -651,6 +691,336 @@ export function registerRoutes(
       return reply.code(502).send({ error: error instanceof Error ? error.message : "read_failed" });
     }
   });
+
+  // ---- File Management Routes ----
+
+  app.get<{ Params: { serial: string }; Querystring: { path?: string } }>(
+    "/api/devices/:serial/files/list",
+    async (request, reply) => {
+      const query = FilePathQuery.safeParse(request.query);
+      const targetPath = query.success && query.data.path ? query.data.path : "/sdcard";
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        return await listFiles(adb, targetPath);
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "read_dir_failed" });
+      }
+    },
+  );
+
+  app.get<{ Params: { serial: string }; Querystring: { path: string } }>(
+    "/api/devices/:serial/files/download",
+    async (request, reply) => {
+      const query = FileDownloadQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const { stream, dispose } = await getReadFileStream(adb, query.data.path);
+        const filename = posix.basename(query.data.path);
+        const encoded = encodeURIComponent(filename);
+        const nodeStream = Readable.fromWeb(stream as any);
+
+        nodeStream.on("close", dispose);
+        nodeStream.on("error", dispose);
+        reply.raw.on("close", dispose);
+
+        return reply
+          .header("Content-Disposition", `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`)
+          .header("Content-Type", "application/octet-stream")
+          .send(nodeStream);
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "download_failed" });
+      }
+    },
+  );
+
+  app.get<{ Params: { serial: string }; Querystring: { path: string } }>(
+    "/api/devices/:serial/files/preview",
+    async (request, reply) => {
+      const query = FileDownloadQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: "bad_request" });
+      const filePath = query.data.path;
+      const dotIndex = filePath.lastIndexOf(".");
+      const ext = dotIndex > 0 ? filePath.slice(dotIndex + 1).toLowerCase() : "";
+      const mime = PREVIEW_MIME_TYPES[ext];
+
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const { stream, dispose } = await getReadFileStream(adb, filePath);
+
+        if (mime) {
+          const nodeStream = Readable.fromWeb(stream as any);
+          nodeStream.on("close", dispose);
+          nodeStream.on("error", dispose);
+          reply.raw.on("close", dispose);
+          return reply.header("Content-Type", mime).header("Cache-Control", "no-cache").send(nodeStream);
+        }
+
+        const reader = stream.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const MAX_TEXT_BYTES = 256 * 1024;
+        let truncated = false;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (totalBytes + value.byteLength > MAX_TEXT_BYTES) {
+              const needed = MAX_TEXT_BYTES - totalBytes;
+              chunks.push(value.subarray(0, needed));
+              totalBytes += needed;
+              truncated = true;
+              await reader.cancel().catch(() => {});
+              break;
+            }
+            chunks.push(value);
+            totalBytes += value.byteLength;
+          }
+        } finally {
+          await dispose();
+        }
+
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+
+        const text = new TextDecoder("utf-8", { fatal: false }).decode(merged);
+        return {
+          type: "text",
+          content: text,
+          truncated,
+          size: totalBytes,
+        };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "preview_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string }; Querystring: { path?: string } }>(
+    "/api/devices/:serial/files/upload",
+    async (request, reply) => {
+      const part = await request.file();
+      if (!part) return reply.code(400).send({ error: "no_file_uploaded" });
+
+      const targetDir = request.query?.path || (part.fields?.path as any)?.value || "/sdcard";
+      const targetFile = posix.join(targetDir, part.filename);
+
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const webStream = Readable.toWeb(part.file) as ReadableStream<Uint8Array>;
+        await writeDeviceFile(adb, targetFile, webStream);
+        return { ok: true, path: targetFile };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "upload_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/files/mkdir",
+    async (request, reply) => {
+      const body = FileMkdirBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        await makeDirectory(adb, body.data.path);
+        return { ok: true };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "mkdir_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/files/delete",
+    async (request, reply) => {
+      const body = FileDeleteBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        await removePath(adb, body.data.path);
+        return { ok: true };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "delete_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/files/rename",
+    async (request, reply) => {
+      const body = FileRenameBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        await moveOrRenamePath(adb, body.data.src, body.data.dest);
+        return { ok: true };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "rename_failed" });
+      }
+    },
+  );
+
+  // ---- App Management Routes ----
+
+  app.get<{ Params: { serial: string }; Querystring: { type?: "user" | "system" | "all" } }>(
+    "/api/devices/:serial/apps/list",
+    async (request, reply) => {
+      const query = AppListQuery.safeParse(request.query);
+      const filter = query.success && query.data.type ? query.data.type : "user";
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        return await listDetailedApps(adb, filter);
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "list_apps_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/apps/start",
+    async (request, reply) => {
+      const body = AppActionBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const out = await startApp(adb, body.data.packageName);
+        return { ok: true, output: out.trim() };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "start_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/apps/stop",
+    async (request, reply) => {
+      const body = AppActionBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const out = await stopApp(adb, body.data.packageName);
+        return { ok: true, output: out.trim() };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "stop_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/apps/clear",
+    async (request, reply) => {
+      const body = AppActionBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const out = await clearAppData(adb, body.data.packageName);
+        return { ok: true, output: out.trim() };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "clear_failed" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/apps/uninstall",
+    async (request, reply) => {
+      const body = AppActionBody.safeParse(request.body);
+      if (!body.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const out = await uninstallApp(adb, body.data.packageName);
+        return { ok: true, output: out.trim() };
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "uninstall_failed" });
+      }
+    },
+  );
+
+  app.get<{ Params: { serial: string }; Querystring: { packageName: string } }>(
+    "/api/devices/:serial/apps/export",
+    async (request, reply) => {
+      const query = AppExportQuery.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: "bad_request" });
+      try {
+        const adb = await adbManager.getAdb(request.params.serial);
+        const apkPath = await getApkPath(adb, query.data.packageName);
+        if (!apkPath) {
+          return reply.code(404).send({ error: "apk_not_found" });
+        }
+        const { stream, dispose } = await getReadFileStream(adb, apkPath);
+        const nodeStream = Readable.fromWeb(stream as any);
+        nodeStream.on("close", dispose);
+        nodeStream.on("error", dispose);
+        reply.raw.on("close", dispose);
+
+        const filename = `${query.data.packageName}.apk`;
+        return reply
+          .header("Content-Disposition", `attachment; filename="${filename}"`)
+          .header("Content-Type", "application/vnd.android.package-archive")
+          .send(nodeStream);
+      } catch (error) {
+        return reply.code(502).send({ error: error instanceof Error ? error.message : "export_failed" });
+      }
+    },
+  );
+
+  app.get<{ Params: { serial: string; packageName: string } }>(
+    "/api/devices/:serial/apps/:packageName/icon",
+    async (request, reply) => {
+      const { serial, packageName } = request.params;
+      if (!isPackageName(packageName)) {
+        return reply.code(400).send({ error: "invalid_package_name" });
+      }
+
+      const cachedFile = getCachedAppIconFile(packageName);
+      if (cachedFile) {
+        const buf = await readFile(cachedFile);
+        return reply
+          .header("Content-Type", "image/png")
+          .header("Cache-Control", "public, max-age=604800, immutable")
+          .send(buf);
+      }
+
+      try {
+        const adb = await adbManager.getAdb(serial);
+        const { iconBuffer } = await resolveAppMetadata(adb, packageName);
+        if (!iconBuffer || iconBuffer.length === 0) {
+          return reply.code(404).send({ error: "icon_not_found" });
+        }
+        return reply
+          .header("Content-Type", "image/png")
+          .header("Cache-Control", "public, max-age=604800, immutable")
+          .send(iconBuffer);
+      } catch {
+        return reply.code(404).send({ error: "icon_not_found" });
+      }
+    },
+  );
+
+  app.post<{ Params: { serial: string } }>(
+    "/api/devices/:serial/apps/install",
+    async (request, reply) => {
+      try {
+        const part = await request.file();
+        if (!part) return reply.code(400).send({ ok: false, error: "no_apk_provided" });
+        const adb = await adbManager.getAdb(request.params.serial);
+        const webStream = Readable.toWeb(part.file) as ReadableStream<Uint8Array>;
+        const res = await installApkStream(adb, webStream);
+        if (!res.ok) {
+          return reply.code(400).send(res);
+        }
+        return res;
+      } catch (error) {
+        return reply.code(502).send({ ok: false, error: error instanceof Error ? error.message : "install_failed" });
+      }
+    },
+  );
 
   // Device display resolution/density (wm size / wm density) override.
   app.get<{ Params: { serial: string } }>("/api/devices/:serial/display", async (request, reply) => {

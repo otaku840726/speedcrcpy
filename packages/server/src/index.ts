@@ -16,6 +16,7 @@ import { DraftStore } from "./scripts/draft-store.js";
 import { ReplayStore } from "./scripts/replay-store.js";
 import { ScriptStore } from "./scripts/store.js";
 import { loadOrCreateWtCert } from "./transport/wt-cert.js";
+import { initAppMetadata } from "./scrcpy/app-metadata.js";
 import { startHealthLog } from "./health-log.js";
 
 // Safety net: the app runs many concurrent adb/scrcpy streams. A single
@@ -32,6 +33,7 @@ process.on("uncaughtException", (error) => {
 });
 
 const config = loadConfig();
+initAppMetadata(config.dataDir);
 const auth = new Auth(config.dataDir, config.password);
 
 const adbManager = new AdbManager(config);
