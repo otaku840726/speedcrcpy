@@ -66,7 +66,7 @@ export async function buildApp(
 
   app.addHook("onRequest", async (request, reply) => {
     if (!request.url.startsWith("/api/")) return;
-    if (request.url === "/api/login" || request.url === "/api/health") return;
+    if (request.url === "/api/login" || request.url === "/api/health" || request.url.startsWith("/api/health/")) return;
     if (!auth.verify(tokenFromRequest(request))) {
       await reply.code(401).send({ error: "unauthorized" });
     }

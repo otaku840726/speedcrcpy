@@ -4,10 +4,21 @@ import { AdbServerNodeTcpConnector } from "@yume-chan/adb-server-node-tcp";
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Config } from "../config.js";
+import { applyAdbPatches, getAdbSocketStats } from "./adb-patch.js";
 import { DeviceStore } from "./device-store.js";
 
 const RECONNECT_BASE_MS = 5_000;
 const RECONNECT_MAX_MS = 60_000;
+/** Maximum age (30 mins) before rotating a cached Adb instance */
+const CACHED_ADB_MAX_AGE_MS = 30 * 60_000;
+/** Maximum operations before rotating a cached Adb instance */
+const CACHED_ADB_MAX_OPS = 1_000;
+
+interface CachedAdbEntry {
+  adb: Adb;
+  createdAt: number;
+  ops: number;
+}
 
 class TimeoutError extends Error {
   constructor() {
@@ -42,9 +53,10 @@ export class AdbManager {
   private reconnectTimer: NodeJS.Timeout | undefined;
   private keepAliveTimer: NodeJS.Timeout | undefined;
   private closed = false;
-  private readonly adbCache = new Map<string, Adb>();
+  private readonly adbCache = new Map<string, CachedAdbEntry>();
 
   constructor(private readonly config: Config) {
+    applyAdbPatches();
     this.client = new AdbServerClient(
       new AdbServerNodeTcpConnector({ host: config.adbHost, port: config.adbPort }),
     );
@@ -61,6 +73,13 @@ export class AdbManager {
     this.live = this.observer.current;
     this.observer.onListChange((devices) => {
       this.live = devices;
+      const liveSerials = new Set(devices.map((d) => d.serial));
+      for (const [serial, entry] of this.adbCache) {
+        if (!liveSerials.has(serial)) {
+          this.adbCache.delete(serial);
+          void entry.adb.close().catch(() => {});
+        }
+      }
       this.rememberConnected();
       this.notify();
     });
@@ -106,11 +125,22 @@ export class AdbManager {
     return () => this.listeners.delete(listener);
   }
 
-  /** For the health heartbeat. Listeners are added per connected browser and
-   * removed on close, so a count that only grows means closes are being
-   * missed — which would leak far more than these callbacks. */
-  counts(): { listeners: number; adbCached: number } {
-    return { listeners: this.listeners.size, adbCached: this.adbCache.size };
+  /** For the health heartbeat. Exposes active listeners, cached transports, and active ADB socket counts. */
+  counts(): {
+    listeners: number;
+    adbCached: number;
+    openSockets: number;
+    totalSocketsCreated: number;
+    totalSocketsClosed: number;
+  } {
+    const stats = getAdbSocketStats();
+    return {
+      listeners: this.listeners.size,
+      adbCached: this.adbCache.size,
+      openSockets: stats.activeSockets,
+      totalSocketsCreated: stats.totalCreated,
+      totalSocketsClosed: stats.totalClosed,
+    };
   }
 
   /** Live adb devices merged with known-but-offline stored devices. */
@@ -189,17 +219,31 @@ export class AdbManager {
   }
 
   /**
-   * Cached Adb per serial for lightweight repeated commands (thumbnails).
-   * A broken transport is discarded and recreated on the next call.
+   * Cached Adb per serial for lightweight repeated commands (thumbnails, stats).
+   * Automatically rotates after 30 minutes or 1,000 operations to prevent any
+   * internal stream/handle accumulation, closing the retired transport after a grace period.
    */
   async getAdb(serial: string): Promise<Adb> {
     const cached = this.adbCache.get(serial);
-    if (cached) return cached;
+    const now = Date.now();
+    if (cached && now - cached.createdAt < CACHED_ADB_MAX_AGE_MS && cached.ops < CACHED_ADB_MAX_OPS) {
+      cached.ops++;
+      return cached.adb;
+    }
+
+    const old = cached;
     const adb = await this.client.createAdb({ serial });
-    this.adbCache.set(serial, adb);
+    const entry: CachedAdbEntry = { adb, createdAt: now, ops: 1 };
+    this.adbCache.set(serial, entry);
     void adb.disconnected.finally(() => {
-      if (this.adbCache.get(serial) === adb) this.adbCache.delete(serial);
+      if (this.adbCache.get(serial) === entry) this.adbCache.delete(serial);
     });
+
+    if (old) {
+      setTimeout(() => {
+        void old.adb.close().catch(() => {});
+      }, 5_000).unref();
+    }
     return adb;
   }
 
@@ -207,6 +251,10 @@ export class AdbManager {
     this.closed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+    for (const entry of this.adbCache.values()) {
+      await entry.adb.close().catch(() => {});
+    }
+    this.adbCache.clear();
     await this.observer?.stop();
   }
 

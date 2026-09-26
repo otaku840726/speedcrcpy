@@ -21,6 +21,8 @@ import { memoryBlocks } from "../scripts/vision-health.js";
 import { capture, framePng } from "../scripts/vision.js";
 import type { ThumbnailManager } from "../scrcpy/thumbnail-manager.js";
 import { readFile } from "node:fs/promises";
+import v8 from "node:v8";
+import { getRecentHealthLogs } from "../health-log.js";
 import { BUILT_AT, VERSION } from "../version.js";
 
 const LoginBody = z.object({ password: z.string() });
@@ -506,21 +508,38 @@ export function registerRoutes(
   // poll which build is live without a token. `version` is the git SHA.
   // `ocr` is here so a silent fall back to the bundled PP-OCRv4 — which reads
   // traditional Chinese wrongly but never errors — is visible from outside.
-  app.get("/api/health", async () => ({
-    ok: true,
-    version: VERSION,
-    builtAt: BUILT_AT,
-    ocr: ocrModel(),
-    // Growth here is what breaks text recognition after hours of running, and
-    // it used to be invisible from outside the container. A block at 1024 MB is
-    // a WebAssembly heap at its ceiling — see vision-health.ts.
-    memory: {
-      rssMb: Math.round(process.memoryUsage().rss / 1048576),
-      externalMb: Math.round(process.memoryUsage().external / 1048576),
-      blocksMb: memoryBlocks().map((b) => b.mb),
-      vision: visionStatus(),
-    },
-  }));
+  app.get("/api/health", async () => {
+    const mem = process.memoryUsage();
+    const heapStats = v8.getHeapStatistics();
+    const adb = adbManager.counts();
+    return {
+      ok: true,
+      version: VERSION,
+      builtAt: BUILT_AT,
+      ocr: ocrModel(),
+      memory: {
+        rssMb: Math.round(mem.rss / 1048576),
+        heapUsedMb: Math.round(mem.heapUsed / 1048576),
+        heapTotalMb: Math.round(mem.heapTotal / 1048576),
+        heapLimitMb: Math.round(heapStats.heap_size_limit / 1048576),
+        externalMb: Math.round(mem.external / 1048576),
+        arrayBuffersMb: Math.round(mem.arrayBuffers / 1048576),
+        blocksMb: memoryBlocks().map((b) => b.mb),
+        vision: visionStatus(),
+      },
+      adb: {
+        openSockets: adb.openSockets,
+        totalCreated: adb.totalSocketsCreated,
+        totalClosed: adb.totalSocketsClosed,
+        cachedAdb: adb.adbCached,
+      },
+    };
+  });
+
+  app.get("/api/health/log", async (_request, reply) => {
+    const lines = getRecentHealthLogs(auth.dataDir, 500);
+    return reply.type("text/plain; charset=utf-8").send(lines.join("\n"));
+  });
 
   app.post("/api/login", async (request, reply) => {
     const body = LoginBody.safeParse(request.body);

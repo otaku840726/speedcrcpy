@@ -343,7 +343,7 @@ export class ManagedSession {
     this.congestion.dispose();
     for (const viewer of this.viewers) viewer.notifyDeviceGone();
     this.viewers.clear();
-    await Promise.allSettled([this.video.close(), this.device.close()]);
+    await Promise.allSettled([this.video.close(), this.device.close(), this.adb.close()]);
   }
 
   private wireVideo(pipeline: VideoPipeline): void {

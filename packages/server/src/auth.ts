@@ -12,7 +12,7 @@ export class Auth {
   private readonly failures = new Map<string, number[]>();
 
   constructor(
-    dataDir: string,
+    readonly dataDir: string,
     private readonly password: string,
   ) {
     const secretPath = join(dataDir, "secret");

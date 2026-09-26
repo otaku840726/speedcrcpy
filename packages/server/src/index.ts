@@ -106,7 +106,7 @@ app.get("/api/wt-info", async () => ({ ...wtInfo, token: wtInfo.enabled ? auth.i
 await app.listen({ host: config.host, port: config.port });
 // Before adb, deliberately: if that start ever hangs, the heartbeat is the one
 // thing still saying what the process is holding.
-startHealthLog(adbManager, sessionManager, replayStore);
+startHealthLog(config.dataDir, adbManager, sessionManager, replayStore);
 await adbManager.start();
 screenManager.start();
 thumbnailManager.start();
