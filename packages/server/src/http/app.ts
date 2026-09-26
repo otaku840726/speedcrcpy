@@ -41,30 +41,19 @@ export async function buildApp(
   scriptEngine: ScriptEngine,
   scheduler: Scheduler,
 ): Promise<FastifyInstance> {
-  // Fastify defaults to a 1 MiB body, which a template probe cannot fit inside:
-  // an image template is cropped at full device resolution and travels as
-  // base64 (a 4/3 inflation), and a saved script carries every template it
-  // uses. Reproduced at 1.2 MB — FST_ERR_CTP_BODY_TOO_LARGE.
-  //
-  // Templates cannot be shrunk to dodge this: template matching is not
-  // scale-invariant, so a downscaled template stops matching the full-size
-  // screen it is searched against. The limit is what has to move. A single
-  // template is still capped (MAX_TEMPLATE_BASE64) so one mis-drag cannot claim
-  // the whole ceiling; this leaves room for several of them in one script.
-  const app = Fastify({ logger: { level: "info" }, bodyLimit: 16 * 1024 * 1024 });
+  // Do not restrict body/payload size at the application level; security limits
+  // and request size caps should be governed by reverse proxies, WAF, or firewalls.
+  const app = Fastify({ logger: { level: "info" }, bodyLimit: Number.MAX_SAFE_INTEGER });
   await app.register(fastifyCookie);
-  await app.register(fastifyMultipart, {
-    limits: {
-      fileSize: 1024 * 1024 * 1024, // 1GB limit for large APKs and files
-    },
-  });
+  await app.register(fastifyMultipart);
 
-  // A body over that ceiling is refused by Fastify before any route runs, and
-  // its stock reply says "Payload Too Large" in English with no hint of which
-  // part of the app is at fault. Every other error keeps its default handling.
   app.setErrorHandler(async (error: FastifyError, request, reply) => {
-    if (error.code === "FST_ERR_CTP_BODY_TOO_LARGE") {
-      return reply.code(413).send({ error: "傳送的內容太大 — 通常是圖像模板,請重新框選小一點的範圍" });
+    if (
+      error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ||
+      (error as any).code === "FST_REQ_FILE_TOO_LARGE" ||
+      (error as any).code === "FST_ERR_MULTIPART_FILE_TOO_LARGE"
+    ) {
+      return reply.code(413).send({ error: "傳送的內容太大" });
     }
     request.log.error(error);
     return reply.send(error);
