@@ -199,7 +199,14 @@ export class Viewer implements SessionViewer {
   }
 
   private onAudioPacket(packet: ScrcpyMediaStreamPacket): void {
-    if (packet.type === "configuration") return;
+    if (packet.type === "configuration") {
+      const meta: AudioMeta | undefined = this.session.device.audioMeta;
+      if (meta) {
+        this.sink.sendAudioMeta(meta);
+        this.sentAudioMeta = true;
+      }
+      return;
+    }
     if (!this.sentAudioMeta) {
       const meta: AudioMeta | undefined = this.session.device.audioMeta;
       if (!meta) return;

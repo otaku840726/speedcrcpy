@@ -467,6 +467,7 @@ export class SessionManager {
     // When screen-off is the standing policy, keep it off after the session
     // ends / the server dies too (scrcpy powers off on close).
     const device = await DeviceSession.start(adb, {
+      serial,
       powerOffOnClose: this.screenOffDefault,
       // Hold the device's screen-off timeout for as long as someone is
       // mirroring. Without it, powering the panel off leaves Android's own

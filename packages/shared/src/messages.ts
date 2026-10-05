@@ -13,10 +13,14 @@ export interface VideoMeta {
   quality: QualitySettings;
 }
 
+export type AudioCodec = "opus" | "aac";
+
 export interface AudioMeta {
-  codec: "opus";
+  codec: AudioCodec;
   sampleRate: number;
   channels: number;
+  /** Codec initialization configuration, e.g. base64 AudioSpecificConfig for AAC */
+  config?: string;
 }
 
 // ---- client -> server ----

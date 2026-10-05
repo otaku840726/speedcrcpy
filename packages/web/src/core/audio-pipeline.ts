@@ -132,7 +132,14 @@ export class AudioPipeline {
   }
 
   async start(meta: AudioMeta): Promise<void> {
-    if (!AudioPipeline.isSupported || this.starting || this.context) return;
+    if (!AudioPipeline.isSupported || this.starting) return;
+    if (this.context) {
+      if (this.meta?.codec !== meta.codec || this.meta?.config !== meta.config) {
+        this.meta = meta;
+        if (this.useNative) this.createDecoder(meta);
+      }
+      return;
+    }
     this.starting = true;
     this.meta = meta;
 
@@ -153,6 +160,12 @@ export class AudioPipeline {
       this.node = node;
       this.createDecoder(meta);
     } else {
+      if (meta.codec === "aac") {
+        console.warn("[audio] AAC playback requires Secure Context (HTTPS or localhost)");
+        this.starting = false;
+        this.notify();
+        return;
+      }
       // Lazy-load the WASM decoder only when actually needed (~100 KB).
       const { OpusDecoder } = await import("opus-decoder");
       const decoder = new OpusDecoder({ channels: meta.channels, forceStereo: true }) as unknown as WasmOpusDecoder;
@@ -241,6 +254,10 @@ export class AudioPipeline {
   }
 
   private createDecoder(meta: AudioMeta): void {
+    if (this.decoder) {
+      this.decoder.close();
+      this.decoder = undefined;
+    }
     const decoder = new AudioDecoder({
       output: (audio) => this.handleDecoded(audio),
       error: (error) => {
@@ -251,10 +268,22 @@ export class AudioPipeline {
         if (this.meta) this.createDecoder(this.meta);
       },
     });
+
+    const isAac = meta.codec === "aac";
+    let description: Uint8Array | undefined;
+    if (isAac && meta.config) {
+      const binary = atob(meta.config);
+      description = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        description[i] = binary.charCodeAt(i);
+      }
+    }
+
     decoder.configure({
-      codec: "opus",
+      codec: isAac ? "mp4a.40.2" : "opus",
       sampleRate: meta.sampleRate,
       numberOfChannels: meta.channels,
+      ...(description ? { description } : {}),
     });
     this.decoder = decoder;
   }

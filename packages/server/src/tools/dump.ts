@@ -29,7 +29,7 @@ await adbManager.start();
 const adb = await adbManager.createAdb(serial);
 
 console.log("[dump] starting control+audio session...");
-const session = await DeviceSession.start(adb);
+const session = await DeviceSession.start(adb, { serial });
 let audioPackets = 0;
 let audioBytes = 0;
 session.onAudioPacket((packet) => {

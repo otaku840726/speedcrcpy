@@ -86,7 +86,7 @@ export class ScreenManager {
       }
       // powerOffOnClose: keep the screen off even if this keeper dies uncleanly
       // (container killed, device dropped) instead of the panel being restored.
-      const session = await DeviceSession.start(adb, { audio: false, powerOffOnClose: true });
+      const session = await DeviceSession.start(adb, { audio: false, clipboard: false, powerOffOnClose: true });
       // Starting one takes a second or two, and a session can claim the device
       // in the middle of that. Without this the keeper would finish starting
       // after being told to stop and then run unowned for the rest of the

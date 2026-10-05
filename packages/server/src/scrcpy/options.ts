@@ -74,17 +74,23 @@ export function makeVideoOptions(config: VideoSessionConfig, forceBaseline: bool
  * the first's raised value as "the original" and write that back for good, so
  * the always-on keeper deliberately leaves it alone.
  */
-export function makeControlOptions(withAudio = true, powerOffOnClose = false, screenOffTimeoutMs?: number) {
+export function makeControlOptions(
+  withAudio = true,
+  audioCodec: "opus" | "aac" = "opus",
+  powerOffOnClose = false,
+  screenOffTimeoutMs?: number,
+  clipboardAutosync = true,
+) {
   return new AdbScrcpyOptionsLatest(
     {
       scid: ScrcpyInstanceId.random(),
       video: false,
       audio: withAudio,
-      audioCodec: "opus",
+      audioCodec,
       control: true,
       // Clipboard sync is only meaningful for a real viewer session, not the
       // idle screen-off keeper.
-      clipboardAutosync: withAudio,
+      clipboardAutosync,
       // scrcpy's device-side cleanup powers the screen off when this instance
       // closes — even on an unclean death (container killed, device dropped) —
       // so the screen stays off after disconnect instead of being restored.

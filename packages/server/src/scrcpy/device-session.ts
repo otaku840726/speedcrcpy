@@ -1,9 +1,46 @@
 import type { AudioMeta } from "@speedcrcpy/shared";
 import type { Adb } from "@yume-chan/adb";
-import { AdbScrcpyClient, type AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
+import { AdbScrcpyClient, AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import { AndroidScreenPowerMode, type ScrcpyControlMessageWriter, type ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 import { makeControlOptions } from "./options.js";
-import { pushServer, removeServer } from "./server-binary.js";
+import { pushServer, removeServer, SCRCPY_SERVER_VERSION } from "./server-binary.js";
+
+/** Per-serial cache of whether the device supports Opus or AAC audio encoder. */
+const audioCodecCache = new Map<string, "opus" | "aac" | null>();
+
+async function probeAudioCodec(adb: Adb, serial?: string): Promise<"opus" | "aac" | null> {
+  if (serial && audioCodecCache.has(serial)) {
+    return audioCodecCache.get(serial)!;
+  }
+  let probePath: string | undefined;
+  try {
+    probePath = await pushServer(adb);
+    const probeOptions = new AdbScrcpyOptionsLatest({}, { version: SCRCPY_SERVER_VERSION });
+    const encoders = await AdbScrcpyClient.getEncoders(adb, probePath, probeOptions);
+    const audioEncoders = encoders.filter((e) => e.type === "audio");
+
+    let codec: "opus" | "aac" | null = null;
+    if (audioEncoders.some((e) => e.codec === "opus" || e.name.toLowerCase().includes("opus"))) {
+      codec = "opus";
+    } else if (audioEncoders.some((e) => e.codec === "aac" || e.name.toLowerCase().includes("aac"))) {
+      codec = "aac";
+      console.log(
+        `[scrcpy:control] ${serial ?? "device"} lacks Opus, using AAC audio encoder (${audioEncoders.map((e) => e.name).join(", ")})`,
+      );
+    } else {
+      console.log(
+        `[scrcpy:control] ${serial ?? "device"} has no supported audio encoder (found: ${audioEncoders.map((e) => e.name).join(", ") || "none"}), starting without audio`,
+      );
+    }
+    if (serial) audioCodecCache.set(serial, codec);
+    return codec;
+  } catch (error) {
+    console.warn(`[scrcpy:control] failed to probe audio encoders for ${serial ?? "device"}: ${(error as Error).message}`);
+    return null;
+  } finally {
+    if (probePath) void removeServer(adb, probePath);
+  }
+}
 
 /** One-shot shell command, trimmed. scrcpy's control channel has no message for
  * asking about power state, so this goes the plain adb way. */
@@ -63,7 +100,9 @@ export class DeviceSession {
   static async start(
     adb: Adb,
     options: {
+      serial?: string;
       audio?: boolean;
+      clipboard?: boolean;
       powerOffOnClose?: boolean;
       screenOffTimeoutMs?: number;
       /** Wake a device that is already dozing. For a viewer session, which
@@ -72,16 +111,24 @@ export class DeviceSession {
       wakeOnStart?: boolean;
     } = {},
   ): Promise<DeviceSession> {
-    const withAudio = options.audio ?? true;
     const powerOffOnClose = options.powerOffOnClose ?? false;
+    const clipboardAutosync = options.clipboard ?? true;
+
+    let audioCodec: "opus" | "aac" | null = null;
+    if (options.audio ?? true) {
+      audioCodec = await probeAudioCodec(adb, options.serial);
+    }
+    const withAudio = audioCodec !== null;
+
     // Unique jar per instance — see pushServer for the unlink race this avoids.
     const serverPath = await pushServer(adb);
+
     let client;
     try {
       client = await AdbScrcpyClient.start(
         adb,
         serverPath,
-        makeControlOptions(withAudio, powerOffOnClose, options.screenOffTimeoutMs),
+        makeControlOptions(withAudio, audioCodec ?? "opus", powerOffOnClose, options.screenOffTimeoutMs, clipboardAutosync),
       );
     } catch (error) {
       void removeServer(adb, serverPath);
@@ -95,8 +142,10 @@ export class DeviceSession {
     // after them is black.
     if (options.wakeOnStart) await session.wakeIfDozing();
 
-    if (withAudio) {
-      void session.consumeAudio();
+    if (withAudio && audioCodec) {
+      void session.consumeAudio(audioCodec);
+    }
+    if (clipboardAutosync) {
       void session.consumeClipboard();
     }
     void session.consumeOutput();
@@ -203,7 +252,7 @@ export class DeviceSession {
     await this.client.close();
   }
 
-  private async consumeAudio(): Promise<void> {
+  private async consumeAudio(codec: "opus" | "aac"): Promise<void> {
     let metadata;
     try {
       metadata = await this.client.audioStream;
@@ -219,13 +268,23 @@ export class DeviceSession {
     }
 
     // scrcpy audio is always 48 kHz stereo.
-    this.audioMeta = { codec: "opus", sampleRate: 48000, channels: 2 };
+    this.audioMeta = { codec, sampleRate: 48000, channels: 2 };
 
     const reader = metadata.stream.getReader();
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (value.type === "configuration") {
+          this.audioMeta = {
+            codec,
+            sampleRate: 48000,
+            channels: 2,
+            config: Buffer.from(value.data).toString("base64"),
+          };
+          for (const listener of this.audioListeners) listener(value);
+          continue;
+        }
         for (const listener of this.audioListeners) listener(value);
       }
     } catch {
