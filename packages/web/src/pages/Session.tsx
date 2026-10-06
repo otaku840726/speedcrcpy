@@ -37,8 +37,8 @@ interface SessionState {
 
 const IS_COARSE_POINTER = typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
 
-/** Ladder rung (720p / 2 Mbps / 30) a software decoder caps auto-adaptation at. */
-const SOFTWARE_MAX_LADDER_INDEX = 3;
+/** Ladder rung (720p / 1 Mbps / 30) a software decoder caps auto-adaptation at. */
+const SOFTWARE_MAX_LADDER_INDEX = 1;
 
 /**
  * Devices this tab means to be driving.

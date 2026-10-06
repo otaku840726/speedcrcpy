@@ -33,20 +33,18 @@ export const BITRATE_OPTIONS: readonly { value: number; label: string }[] = [
 
 export const FPS_OPTIONS: readonly number[] = [15, 24, 30, 45, 60, 90, 120];
 
-export const DEFAULT_QUALITY: QualitySettings = { maxSize: 1280, videoBitRate: 4_000_000, maxFps: 60 };
+export const DEFAULT_QUALITY: QualitySettings = { maxSize: 1920, videoBitRate: 2_000_000, maxFps: 30 };
 
 /** Auto-adaptation ladder (best to worst); the congestion controller steps it. */
 export const QUALITY_LADDER: readonly QualitySettings[] = [
-  { maxSize: 2560, videoBitRate: 10_000_000, maxFps: 60 },
-  { maxSize: 1920, videoBitRate: 8_000_000, maxFps: 60 },
-  { maxSize: 1280, videoBitRate: 4_000_000, maxFps: 60 },
-  { maxSize: 1280, videoBitRate: 2_000_000, maxFps: 30 },
-  { maxSize: 960, videoBitRate: 1_000_000, maxFps: 30 },
+  { maxSize: 1920, videoBitRate: 2_000_000, maxFps: 30 },
+  { maxSize: 1280, videoBitRate: 1_000_000, maxFps: 30 },
+  { maxSize: 960, videoBitRate: 500_000, maxFps: 30 },
   { maxSize: 640, videoBitRate: 300_000, maxFps: 15 },
 ];
 
 /** Default starting rung for auto mode. */
-export const DEFAULT_LADDER_INDEX = 2;
+export const DEFAULT_LADDER_INDEX = 0;
 
 /** Nearest ladder rung to arbitrary settings, matched by bitrate. */
 export function nearestLadderIndex(quality: QualitySettings): number {
