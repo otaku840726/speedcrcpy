@@ -10,5 +10,10 @@
   },
   "devDependencies": {
     "typescript": "^5.6.0"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@fails-components/webtransport@1.6.7": "patches/@fails-components__webtransport@1.6.7.patch"
+    }
   }
 }

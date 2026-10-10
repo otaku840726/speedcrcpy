@@ -91,6 +91,7 @@ export function startHealthLog(
 
     const sessions = await sessionManager.listConnections().catch(() => []);
     const viewers = sessions.reduce((n, s) => n + s.viewers.length, 0);
+    const wtViewers = sessions.reduce((n, s) => n + s.viewers.filter((v) => v.transport === "webtransport").length, 0);
     const replay = replayStore.counts();
     const adb = adbManager.counts();
     const offload = visionStatus();
@@ -101,7 +102,7 @@ export function startHealthLog(
       `rss=${rssMb}MB heap=${heapUsedMb}/${heapTotalMb}MB (limit=${heapLimitMb}MB, ${heapPct}%) ` +
       `ext=${extMb}MB ab=${abMb}MB | ` +
       `adbSockets=${adb.openSockets} (created=${adb.totalSocketsCreated} closed=${adb.totalSocketsClosed}) cached=${adb.adbCached} | ` +
-      `sessions=${sessions.length} viewers=${viewers} | ` +
+      `sessions=${sessions.length} viewers=${viewers}${wtViewers > 0 ? ` (wt=${wtViewers})` : ""} | ` +
       `replay shots=${replay.shots} events=${replay.events} | ` +
       `caps=${vision.capturesServed} vision=${offload.callsServed} pending=${offload.pending}`;
 

@@ -153,12 +153,14 @@ export class WtSink implements ViewerSink {
 
   clearVideo(): void {
     for (const entry of this.activeVideo.slice()) this.abort(entry);
+    this.pruneStreamObjs();
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
     this.clearVideo();
+    this.pruneStreamObjs();
     try {
       void this.controlWriter.close().catch(() => {});
     } catch {
@@ -176,6 +178,11 @@ export class WtSink implements ViewerSink {
   /** Local backpressure: bytes stuck in a blocked writer (QUIC flow control). */
   get bufferedBytes(): number {
     return this.outstandingBytes;
+  }
+
+  get activeStreams(): number {
+    const raw = this.session as unknown as { streamObjs?: Set<unknown> };
+    return raw.streamObjs?.size ?? this.activeVideo.length;
   }
 
   // ---- inbound / lifecycle ----
@@ -242,6 +249,29 @@ export class WtSink implements ViewerSink {
     if (dropped) this.droppedFrames++;
     const idx = this.activeVideo.indexOf(entry);
     if (idx >= 0) this.activeVideo.splice(idx, 1);
+    this.pruneStreamObjs();
+  }
+
+  /**
+   * Defensive cleanup: @fails-components/webtransport tracks all streams in
+   * session.streamObjs. Prune any closed/aborted streams so closed objects
+   * are never held alive across the lifetime of a long-running session.
+   */
+  private pruneStreamObjs(): void {
+    const raw = this.session as unknown as { streamObjs?: Set<unknown>; removeStreamObj?: (s: unknown) => void };
+    const streamObjs = raw.streamObjs;
+    if (streamObjs instanceof Set && streamObjs.size > MAX_ACTIVE_VIDEO) {
+      for (const obj of streamObjs) {
+        const stream = obj as { writableclosed?: boolean };
+        if (stream.writableclosed) {
+          if (typeof raw.removeStreamObj === "function") {
+            raw.removeStreamObj(obj);
+          } else {
+            streamObjs.delete(obj);
+          }
+        }
+      }
+    }
   }
 
   private async readControl(readable: WtReadable): Promise<void> {
