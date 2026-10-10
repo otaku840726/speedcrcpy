@@ -101,6 +101,7 @@ export class WtSink implements ViewerSink {
     readonly remoteAddress: string | null = null,
   ) {
     this.controlWriter = control.writable.getWriter();
+    this.hookStreamCleanup();
     void this.readControl(control.readable);
     void this.session.closed.then(() => this.handleClose()).catch(() => this.handleClose());
   }
@@ -271,6 +272,50 @@ export class WtSink implements ViewerSink {
           }
         }
       }
+    }
+  }
+
+  /**
+   * Runtime prototype patch for @fails-components/webtransport:
+   * The library author forgot to call `this.parentobj.removeStreamObj(this)`
+   * in `streamFinal`, causing closed stream objects to be retained forever.
+   * Intercept `addStreamObj` once to hook `HttpWTStream.prototype.onStreamNetworkFinish`.
+   */
+  private hookStreamCleanup(): void {
+    const rawSession = this.session as unknown as {
+      addStreamObj?: (strobj: unknown) => void;
+      removeStreamObj?: (strobj: unknown) => void;
+    };
+    if (typeof rawSession.addStreamObj === "function") {
+      const origAdd = rawSession.addStreamObj;
+      rawSession.addStreamObj = function (strobj: unknown) {
+        origAdd.call(this, strobj);
+        if (strobj && typeof strobj === "object") {
+          const proto = Object.getPrototypeOf(strobj) as {
+            _speedcrcpyCleanupHooked?: boolean;
+            onStreamNetworkFinish?: (args: { nettask?: string }) => void;
+          };
+          if (proto && !proto._speedcrcpyCleanupHooked) {
+            proto._speedcrcpyCleanupHooked = true;
+            const origFinish = proto.onStreamNetworkFinish;
+            proto.onStreamNetworkFinish = function (args: { nettask?: string }) {
+              if (origFinish) origFinish.call(this, args);
+              if (args?.nettask === "streamFinal" || args?.nettask === "resetStream") {
+                try {
+                  const parent = (this as { parentobj?: { removeStreamObj?: (s: unknown) => void; streamObjs?: Set<unknown> } }).parentobj;
+                  if (typeof parent?.removeStreamObj === "function") {
+                    parent.removeStreamObj(this);
+                  } else if (parent?.streamObjs instanceof Set) {
+                    parent.streamObjs.delete(this);
+                  }
+                } catch {
+                  /* session already gone */
+                }
+              }
+            };
+          }
+        }
+      };
     }
   }
 
